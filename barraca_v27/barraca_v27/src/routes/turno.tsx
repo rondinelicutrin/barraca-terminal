@@ -25,9 +25,10 @@ function TurnoPage() {
   const { state } = useStore();
   const nav = useNavigate();
   useEffect(() => {
+    if (!state.hidratado) return; // espera ler o login salvo (F5 não desloga)
     if (!state.currentUser) nav({ to: "/" });
     else if (state.currentUser.role === "owner") nav({ to: "/owner" });
-  }, [state.currentUser, nav]);
+  }, [state.hidratado, state.currentUser, nav]);
   if (!state.currentUser || state.currentUser.role !== "employee") return null;
   return (
     <Shell>
@@ -316,8 +317,10 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
 
   // Valida se sobra excede estoque. n=null significa "campo apagado" (não preenchido);
   // n=0 é um valor real e explícito (acabou tudo) e deve ser aceito normalmente.
+  // Com a chegada ainda vazia não dá para saber o limite (a pessoa pode preencher a sobra primeiro);
+  // com a chegada preenchida — inclusive 0 — a sobra nunca pode passar de entrada + chegada.
   const handleSobra = (n: number | null) => {
-    if (n != null && n > limiteEstoque && limiteEstoque > 0) {
+    if (n != null && n > limiteEstoque && (item.chegada != null || limiteEstoque > 0)) {
       alert(`Sobra não pode ser maior que entrada + chegada (${limiteEstoque}).`);
       return;
     }

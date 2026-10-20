@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, type Turno, type TaxasMaquininha } from "@/lib/store";
+import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
@@ -95,6 +95,12 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       const nomes = produtosIncompletos.map((p) => p.name);
       const lista = nomes.length > 12 ? `${nomes.slice(0, 12).join(", ")} e mais ${nomes.length - 12}` : nomes.join(", ");
       alert(`Preencha Chegada e Sobra (pode ser 0) de todos os produtos, no menu Turno, antes de fechar.\n\nFaltam (${produtosIncompletos.length}): ${lista}`);
+      return;
+    }
+    // Sobra maior que entrada + chegada (ex.: a chegada foi corrigida para menos depois) inflaria o estoque
+    const sobraDemais = products.filter((p) => { const it = t.items[p.id]; return it && sobraOverflow(it); });
+    if (sobraDemais.length > 0) {
+      alert(`A sobra não pode ser maior que entrada + chegada. Corrija no menu Turno antes de fechar:\n\n${sobraDemais.map((p) => `• ${p.name}`).join("\n")}`);
       return;
     }
     const naoPreenchidos = camposObrigatoriosDoTurno(t, state.taxasMaquininha)

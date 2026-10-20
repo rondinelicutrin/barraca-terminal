@@ -58,7 +58,8 @@ export interface Funcionario {
   id: string;
   nome: string;
   username: string;
-  password: string;
+  // Só existe antes de rodar o seguranca_login.sql (depois o app não lê mais a senha do banco)
+  password?: string;
   taxaHora: number; // R$/hora
   role: "employee" | "owner"; // "owner" = administrador, também acessa o Painel
   ativo?: boolean; // false = desativado: não entra no app e não aparece nas listas de trabalho (histórico é mantido)
@@ -90,6 +91,9 @@ export interface Ponto {
 export function ehSoConsumo(p: Pick<Ponto, "entrada" | "saida" | "transporte" | "refeicao">): boolean {
   return p.entrada.slice(0, 5) === p.saida.slice(0, 5) && p.transporte === 0 && p.refeicao === 0;
 }
+
+// Usuário comparado sem espaços nas pontas e sem diferença de maiúsculas/minúsculas
+export const normalizarUsuario = (u: string) => u.trim().toLowerCase();
 
 export interface User {
   role: "owner" | "employee";
@@ -149,6 +153,9 @@ export interface State {
   descontosPorFuncionario: Record<string, Record<string, DescontoConfig>>;
   retiradas: Retirada[]; // retiradas de dinheiro do caixa (com motivo)
   taxasMaquininha: TaxasMaquininha; // percentual cobrado por cada maquininha
+  // true depois que o login e os dados guardados no navegador foram lidos. Até lá as telas não
+  // redirecionam ninguém — antes, recarregar a página (F5) jogava o usuário para o login/Painel.
+  hidratado?: boolean;
 }
 
 const STORAGE_KEY = "barraca_v7";
@@ -176,7 +183,7 @@ const initialState = (): State => {
 };
 
 type Action =
-  | { type: "HYDRATE"; state: State }
+  | { type: "HYDRATE"; state: State | null }
   | { type: "LOGIN"; user: User }
   | { type: "LOGOUT" }
   | { type: "START_SHIFT"; shift: ShiftKey; date: string; employee: string; outrosFuncionarios?: string[] }
@@ -224,7 +231,10 @@ type Action =
 
 function persist(s: State) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    const { hidratado: _h, ...salvar } = s;
+    // Senha nunca fica guardada no navegador
+    const funcionarios = s.funcionarios.map(({ password: _p, ...f }) => f);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...salvar, funcionarios }));
   } catch {}
 }
 
@@ -247,6 +257,9 @@ function funcionarioFromRow(row: any): Funcionario {
   };
 }
 
+const COLUNAS_FUNCIONARIO =
+  "id,nome,username,taxa_hora,role,ativo,transporte_ida,transporte_volta,refeicao,valor_diaria,desconto,adicional,created_at";
+
 // Envia para o Supabase o que mudou nos funcionários. Roda "em segundo plano": a tela já foi
 // atualizada na hora (não espera a internet); se der erro de conexão, avisa no console.
 async function sincronizarFuncionario(a: Action) {
@@ -256,7 +269,7 @@ async function sincronizarFuncionario(a: Action) {
         id: a.f.id,
         nome: a.f.nome,
         username: a.f.username,
-        password: a.f.password,
+        password: a.f.password, // o banco criptografa (seguranca_login.sql)
         taxa_hora: a.f.taxaHora,
         role: a.f.role,
         transporte_ida: a.f.transporteIda ?? null,
@@ -504,8 +517,9 @@ function reducer(s: State, a: Action): State {
   let n: State;
   switch (a.type) {
     case "HYDRATE": {
+      if (!a.state) return { ...s, hidratado: true }; // nada salvo neste aparelho
       // Migração defensiva: preenche campos novos que podem não existir em saves antigos
-      const migrated = { ...a.state };
+      const migrated = { ...a.state, hidratado: true };
       if (!migrated.estoqueQtd) migrated.estoqueQtd = {};
       if (!migrated.estoqueMinimo) migrated.estoqueMinimo = {};
       if (!migrated.configGeral) migrated.configGeral = { transporteIda: 0, transporteVolta: 0, refeicao: 15 };
@@ -1478,6 +1492,9 @@ async function carregarProdutos(
   return ok;
 }
 
+const raw0 = (salvo: Partial<State>): State | null =>
+  Object.keys(salvo).length > 0 ? { ...initialState(), ...salvo } : null;
+
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
   // Sempre aponta para o estado mais recente — usado nos envios com atraso (leem o valor na hora de enviar)
@@ -1499,17 +1516,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let localSalvo: Partial<State> = {};
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        localSalvo = parsed;
-        dispatch({ type: "HYDRATE", state: { ...initialState(), ...parsed } });
-      }
+      if (raw) localSalvo = JSON.parse(raw);
     } catch {}
+    dispatch({ type: "HYDRATE", state: raw0(localSalvo) });
 
     // 2) Carrega os funcionários do Supabase — a partir de agora, a lista de funcionários
     // (cadastro, senha, taxa por hora, etc.) mora no banco, não mais só no navegador.
     (async () => {
-      const { data, error } = await supabase.from("funcionarios").select("*").order("created_at");
+      let { data, error } = await supabase.from("funcionarios").select("*").order("created_at");
+      if (error?.code === "42501") {
+        // Depois do seguranca_login.sql a coluna de senha não pode ser lida: busca as demais
+        ({ data, error } = await supabase.from("funcionarios").select(COLUNAS_FUNCIONARIO).order("created_at"));
+      }
       if (error) {
         // eslint-disable-next-line no-console
         console.error("Não foi possível carregar os funcionários do Supabase:", error);

@@ -10,9 +10,10 @@ function OwnerLayout() {
   const { state } = useStore();
   const nav = useNavigate();
   useEffect(() => {
+    if (!state.hidratado) return; // espera ler o login salvo (F5 não desloga)
     if (!state.currentUser) nav({ to: "/" });
     else if (state.currentUser.role !== "owner") nav({ to: "/turno" });
-  }, [state.currentUser, nav]);
+  }, [state.hidratado, state.currentUser, nav]);
   if (state.currentUser?.role !== "owner") return null;
   return <Outlet />;
 }

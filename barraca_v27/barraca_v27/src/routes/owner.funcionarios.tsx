@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
-import { useStore, getAllProducts, valorConsumoPonto, ehSoConsumo, type Funcionario } from "@/lib/store";
+import { useStore, getAllProducts, valorConsumoPonto, ehSoConsumo, normalizarUsuario, type Funcionario } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
@@ -39,10 +39,12 @@ function Funcionarios() {
   const [editando, setEditando] = useState<string | null>(null);
 
   const add = () => {
-    if (!nome || !username || !password) return alert("Preencha todos os campos");
-    if (state.funcionarios.some((f) => f.username === username) || username === "dono")
+    // Usuário sem espaços e em minúsculas: "Ana " e "ana" eram aceitos como pessoas diferentes
+    const user = normalizarUsuario(username);
+    if (!nome.trim() || !user || !password) return alert("Preencha todos os campos");
+    if (state.funcionarios.some((f) => normalizarUsuario(f.username) === user) || user === "dono")
       return alert("Usuário já existe");
-    const f: Funcionario = { id: crypto.randomUUID(), nome, username, password, taxaHora, role };
+    const f: Funcionario = { id: crypto.randomUUID(), nome: nome.trim(), username: user, password, taxaHora, role };
     dispatch({ type: "ADD_FUNC", f });
     setNome(""); setUsername(""); setPassword(""); setTaxaHora(0); setRole("employee");
   };

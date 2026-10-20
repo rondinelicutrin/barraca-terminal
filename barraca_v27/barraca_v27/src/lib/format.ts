@@ -6,22 +6,24 @@ export const num = (n: number) =>
 
 // Aceita tanto vírgula quanto ponto como separador decimal (o teclado numérico do celular
 // costuma inserir "." em inputMode="decimal", mesmo em aparelhos configurados em português).
+// Todos os campos do app são valores ou quantidades: o sinal de menos é ignorado (nunca negativo).
 export const parseBR = (s: string): number => {
   if (!s) return 0;
-  let cleaned = String(s).replace(/[^\d.,\-]/g, "");
+  let cleaned = String(s).replace(/[^\d.,]/g, "");
   if (cleaned.includes(",")) {
     // Vírgula presente: ela é o separador decimal; pontos (se houver) são separadores de milhar
     cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(cleaned)) {
+    // "1.500" ou "12.000.000": ponto como separador de milhar (antes "1.500" virava 1,5)
+    cleaned = cleaned.replace(/\./g, "");
   }
   // Sem vírgula: mantém o ponto como separador decimal (ex.: "10.5" digitado no teclado numérico)
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 };
 
-export const parseInt2 = (s: string): number => {
-  const n = parseInt(String(s).replace(/[^\d-]/g, ""), 10);
-  return isNaN(n) ? 0 : n;
-};
+// Quantidade inteira: "1,5" vira 1 (antes juntava os dígitos e virava 15); "1.000" vira 1000.
+export const parseInt2 = (s: string): number => Math.trunc(parseBR(s));
 
 export const formatDateBR = (iso: string) => {
   const [y, m, d] = iso.split("-");
