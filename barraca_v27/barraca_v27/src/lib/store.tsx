@@ -198,6 +198,14 @@ type Action =
   | { type: "SET_RETIRADAS_FROM_DB"; retiradas: Retirada[] }
   | { type: "SET_DESCONTOS_FROM_DB"; descontos: Record<string, Record<string, DescontoConfig>> }
   | { type: "SET_CONFIG_FROM_DB"; configGeral: ConfigGeral; taxasMaquininha: TaxasMaquininha }
+  | {
+      type: "SET_PRODUTOS_FROM_DB";
+      precos: Record<string, number>;
+      bebidas: Product[];
+      removedProductIds?: string[]; // ausente = banco ainda sem a coluna "ativo"
+      estoqueQtd: Record<string, number>;
+      estoqueMinimo: Record<string, number>;
+    }
   | { type: "ADD_PONTO"; p: Ponto }
   | { type: "REMOVE_PONTO"; id: string }
   | { type: "UPDATE_PONTO_CONSUMO"; pontoId: string; productId: string; qty: number }
@@ -722,6 +730,24 @@ function reducer(s: State, a: Action): State {
         },
       };
       break;
+    case "SET_PRODUTOS_FROM_DB": {
+      // O banco manda nos preços, produtos cadastrados e estoque — assim todos os aparelhos ficam iguais.
+      // Produtos cadastrados só neste aparelho (ainda não enviados) são mantidos.
+      const idsDb = new Set(a.bebidas.map((b) => b.id));
+      const soLocais = s.bebidas.filter((b) => !idsDb.has(b.id));
+      const removidos = a.removedProductIds
+        ? Array.from(new Set([...a.removedProductIds, ...s.removedProductIds]))
+        : s.removedProductIds;
+      n = {
+        ...s,
+        precos: { ...s.precos, ...a.precos },
+        bebidas: [...a.bebidas, ...soLocais],
+        removedProductIds: removidos,
+        estoqueQtd: { ...s.estoqueQtd, ...a.estoqueQtd },
+        estoqueMinimo: { ...s.estoqueMinimo, ...a.estoqueMinimo },
+      };
+      break;
+    }
     case "ADD_PONTO":
       n = { ...s, pontos: [a.p, ...s.pontos] }; break;
     case "REMOVE_PONTO":
@@ -1291,27 +1317,165 @@ async function carregarConfig(
   return true;
 }
 
-// Produtos cadastrados pelo dono precisam existir na tabela "produtos" do banco — as tabelas de turno,
-// consumo e descontos exigem isso. (Os produtos padrão já foram criados pelo seed_produtos.sql.)
-async function sincronizarProdutosCadastrados(produtos: Product[], precos: Record<string, number>) {
+// ---- Produtos (tabela "produtos"): preço, produtos cadastrados pelo dono, removidos e estoque ----
+// Antes isso ficava só no navegador de cada aparelho: o preço trocado pelo dono não chegava ao tablet do
+// funcionário. Agora o banco é a referência e todo aparelho carrega dele ao abrir (e ao voltar para o app).
+const MIGRACAO_PRODUTOS_KEY = "barraca_migracao_produtos_v1";
+const IDS_PADRAO = new Set(DEFAULT_PRODUCTS.map((p) => p.id));
+
+function acharProduto(s: State, id: string): Product | undefined {
+  return DEFAULT_PRODUCTS.find((p) => p.id === id) ?? s.bebidas.find((p) => p.id === id);
+}
+
+function produtoToRow(s: State, p: Product) {
+  const idxPadrao = DEFAULT_PRODUCTS.findIndex((x) => x.id === p.id);
+  return {
+    id: p.id,
+    nome: p.name,
+    categoria: p.category,
+    preco: s.precos[p.id] ?? p.price,
+    saleable: p.saleable,
+    free_for_employee: !!p.freeForEmployee,
+    special: !!p.special,
+    decimal_qty: !!p.decimal,
+    ordem: idxPadrao >= 0 ? idxPadrao : 1000 + Math.max(0, s.bebidas.findIndex((x) => x.id === p.id)),
+  };
+}
+
+function produtoFromRow(row: any): Product {
+  return {
+    id: row.id,
+    name: row.nome,
+    price: Number(row.preco) || 0,
+    category: row.categoria,
+    saleable: row.saleable !== false,
+    freeForEmployee: !!row.free_for_employee || undefined,
+    special: !!row.special || undefined,
+    decimal: !!row.decimal_qty || undefined,
+  };
+}
+
+// Erro de coluna inexistente (o SQL adicionar_estoque_produtos.sql ainda não foi rodado)
+const ehColunaFaltando = (e: any) =>
+  e?.code === "42703" || e?.code === "PGRST204" || /column/i.test(String(e?.message ?? ""));
+let avisouSqlProdutos = false;
+function avisarSqlProdutos() {
+  if (avisouSqlProdutos) return;
+  avisouSqlProdutos = true;
+  // eslint-disable-next-line no-console
+  console.warn("Banco sem as colunas de estoque/ativo em 'produtos': rode adicionar_estoque_produtos.sql no SQL Editor do Supabase.");
+}
+
+// Envia o produto inteiro (nome, categoria, preço...). Usado quando o dono cadastra ou troca o preço.
+async function sincronizarPrecoProduto(s: State, id: string) {
+  const p = acharProduto(s, id);
+  if (!p) return;
   try {
-    const rows = produtos.map((p, i) => ({
-      id: p.id,
-      nome: p.name,
-      categoria: p.category,
-      preco: precos[p.id] ?? p.price,
-      saleable: p.saleable,
-      free_for_employee: !!p.freeForEmployee,
-      special: !!p.special,
-      decimal_qty: !!p.decimal,
-      ordem: 1000 + i,
-    }));
-    const { error } = await supabase.from("produtos").upsert(rows, { onConflict: "id" });
+    const { error } = await supabase.from("produtos").upsert(produtoToRow(s, p), { onConflict: "id" });
     if (error) throw error;
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.error("Não foi possível enviar os produtos cadastrados ao Supabase:", e);
+    console.error("Não foi possível salvar o produto no Supabase:", e);
   }
+}
+
+// Envia só o estoque (não mexe no preço — um aparelho desatualizado nunca desfaz o preço do dono)
+async function sincronizarEstoqueProduto(s: State, id: string) {
+  try {
+    const { error } = await supabase
+      .from("produtos")
+      .update({ estoque_qtd: s.estoqueQtd[id] ?? null, estoque_minimo: s.estoqueMinimo[id] ?? null })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (ehColunaFaltando(e)) return avisarSqlProdutos();
+    // eslint-disable-next-line no-console
+    console.error("Não foi possível salvar o estoque no Supabase:", e);
+  }
+}
+
+async function removerProdutoSupabase(id: string) {
+  try {
+    const { error } = await supabase.from("produtos").update({ ativo: false }).eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (ehColunaFaltando(e)) {
+      avisarSqlProdutos();
+      alert("Para remover produtos em todos os aparelhos, rode o arquivo adicionar_estoque_produtos.sql no SQL Editor do Supabase (até lá a remoção vale só neste aparelho).");
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.error("Não foi possível remover o produto no Supabase:", e);
+  }
+}
+
+async function carregarProdutos(
+  dispatch: React.Dispatch<Action>, local: Partial<State>, migrar: boolean, antesDeAplicar?: () => void,
+): Promise<boolean> {
+  const { data, error } = await supabase.from("produtos").select("*");
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.error("Não foi possível carregar os produtos do Supabase:", error);
+    return false;
+  }
+  const rows = data ?? [];
+  const temColunaAtivo = rows.some((r: any) => "ativo" in r);
+  const precos: Record<string, number> = {};
+  const estoqueQtd: Record<string, number> = {};
+  const estoqueMinimo: Record<string, number> = {};
+  const bebidas: Product[] = [];
+  const removedProductIds: string[] = [];
+  const ordenadas = [...rows].sort((a: any, b: any) => (a.ordem ?? 0) - (b.ordem ?? 0));
+  for (const r of ordenadas) {
+    if (r.preco != null) precos[r.id] = Number(r.preco);
+    if (r.estoque_qtd != null) estoqueQtd[r.id] = Number(r.estoque_qtd);
+    if (r.estoque_minimo != null) estoqueMinimo[r.id] = Number(r.estoque_minimo);
+    if (r.ativo === false) removedProductIds.push(r.id);
+    if (!IDS_PADRAO.has(r.id)) bebidas.push(produtoFromRow(r));
+  }
+
+  let ok = true;
+  if (migrar) {
+    // Primeira vez deste aparelho com produtos no banco: o que só existia aqui sobe para o banco.
+    // Preço: só sobe se foi trocado neste aparelho e o banco ainda está com o preço original.
+    const idsDb = new Set(rows.map((r: any) => r.id));
+    const localState = { ...local, precos: local.precos ?? {}, bebidas: local.bebidas ?? [] } as State;
+    const subir: any[] = [];
+    for (const p of DEFAULT_PRODUCTS) {
+      const lp = localState.precos[p.id];
+      const dbp = precos[p.id];
+      if (lp != null && lp !== p.price && (dbp == null || dbp === p.price)) {
+        subir.push(produtoToRow(localState, p));
+        precos[p.id] = lp;
+      }
+    }
+    for (const b of localState.bebidas) {
+      if (!idsDb.has(b.id)) subir.push(produtoToRow(localState, b));
+    }
+    if (subir.length > 0) {
+      const { error: errUp } = await supabase.from("produtos").upsert(subir, { onConflict: "id" });
+      if (errUp) {
+        ok = false;
+        // eslint-disable-next-line no-console
+        console.error("Não foi possível enviar os produtos deste aparelho para o Supabase:", errUp);
+      }
+    }
+    if (temColunaAtivo) {
+      for (const id of local.removedProductIds ?? []) {
+        if (removedProductIds.includes(id)) continue;
+        const { error: errRm } = await supabase.from("produtos").update({ ativo: false }).eq("id", id);
+        if (errRm) ok = false;
+      }
+    }
+  }
+
+  antesDeAplicar?.();
+  dispatch({
+    type: "SET_PRODUTOS_FROM_DB",
+    precos, bebidas, estoqueQtd, estoqueMinimo,
+    removedProductIds: temColunaAtivo ? removedProductIds : undefined,
+  });
+  return ok;
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -1320,8 +1484,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // Regras de envio dos turnos: só o que a pessoa mexeu NESTE aparelho vai para o banco. Antes, ao abrir o
+  // app, o histórico guardado no navegador era reenviado inteiro — um tablet desatualizado desfazia as
+  // correções do dono e trazia de volta fechamentos que ele tinha excluído.
+  const turnosCarregadosRef = useRef(false); // terminou a 1ª leitura dos turnos no banco
+  const turnoSujoRef = useRef(false);        // turno em andamento foi alterado aqui e precisa ser enviado
+  const histPendentesRef = useRef(new Set<string>()); // fechamentos (fechados/corrigidos aqui) a enviar
+  // Estoque (quantidade e alerta): só é enviado depois de uma ação feita aqui, nunca por um carregamento
+  const estoqueSujoRef = useRef(false);
+  const estoqueBaseRef = useRef({ q: state.estoqueQtd, m: state.estoqueMinimo });
+
   useEffect(() => {
-    // 1) Carrega o que ainda está só no navegador (ponto, produtos, etc. — por enquanto)
+    // 1) Carrega o que está guardado no navegador (aparece na hora, mesmo sem internet)
     let localSalvo: Partial<State> = {};
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -1344,42 +1518,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "SET_FUNCIONARIOS", funcionarios: (data ?? []).map(funcionarioFromRow) });
     })();
 
-    // 3) Carrega o turno em andamento (se houver) e o histórico de turnos fechados do Supabase
+    // 3) Carrega o turno em andamento (se houver) e o histórico de turnos fechados do Supabase.
+    // Se der erro de conexão, mantém o que está no aparelho (não apaga nada nem sobrescreve o banco).
     (async () => {
-      const { data: ativoRows, error: errAtivo } = await supabase
-        .from("turnos").select("*").is("closed_at", null)
-        .order("created_at", { ascending: false }).limit(1);
-      if (errAtivo) {
-        // eslint-disable-next-line no-console
-        console.error("Não foi possível carregar o turno em andamento do Supabase:", errAtivo);
-      }
-      let turnoAtivo: Turno | null = null;
-      if (ativoRows && ativoRows.length > 0) {
-        const row = ativoRows[0];
-        const { data: itemRows } = await supabase.from("turno_itens").select("*").eq("turno_id", row.id);
-        const items: Record<string, ShiftItem> = {};
-        for (const ir of itemRows ?? []) items[ir.product_id] = shiftItemFromRow(ir);
-        turnoAtivo = turnoFromRow(row, items);
-      }
-
-      const { data: histRows, error: errHist } = await supabase
-        .from("turnos").select("*").not("closed_at", "is", null).order("date", { ascending: false });
-      if (errHist) {
-        // eslint-disable-next-line no-console
-        console.error("Não foi possível carregar o histórico de turnos do Supabase:", errHist);
-      }
-      let historico: Turno[] = [];
-      if (histRows && histRows.length > 0) {
-        const ids = histRows.map((r: any) => r.id);
-        const allItemRows = await buscarEmLotes("turno_itens", "turno_id", ids);
-        const itemsByTurno: Record<string, Record<string, ShiftItem>> = {};
-        for (const ir of allItemRows ?? []) {
-          (itemsByTurno[ir.turno_id] ??= {})[ir.product_id] = shiftItemFromRow(ir);
+      try {
+        const { data: ativoRows, error: errAtivo } = await supabase
+          .from("turnos").select("*").is("closed_at", null)
+          .order("created_at", { ascending: false }).limit(1);
+        if (errAtivo) throw errAtivo;
+        let turnoAtivo: Turno | null = null;
+        if (ativoRows && ativoRows.length > 0) {
+          const row = ativoRows[0];
+          const { data: itemRows, error: errItens } = await supabase.from("turno_itens").select("*").eq("turno_id", row.id);
+          if (errItens) throw errItens;
+          const items: Record<string, ShiftItem> = {};
+          for (const ir of itemRows ?? []) items[ir.product_id] = shiftItemFromRow(ir);
+          turnoAtivo = turnoFromRow(row, items);
         }
-        historico = histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
-      }
 
-      dispatch({ type: "SET_TURNOS_FROM_DB", turnoAtivo, historico });
+        const { data: histRows, error: errHist } = await supabase
+          .from("turnos").select("*").not("closed_at", "is", null).order("date", { ascending: false });
+        if (errHist) throw errHist;
+        let historico: Turno[] = [];
+        if (histRows && histRows.length > 0) {
+          const ids = histRows.map((r: any) => r.id);
+          const allItemRows = await buscarEmLotes("turno_itens", "turno_id", ids);
+          const itemsByTurno: Record<string, Record<string, ShiftItem>> = {};
+          for (const ir of allItemRows ?? []) {
+            (itemsByTurno[ir.turno_id] ??= {})[ir.product_id] = shiftItemFromRow(ir);
+          }
+          historico = histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
+        }
+
+        // O que veio do banco substitui o que estava no aparelho; nada disso é reenviado.
+        turnoSujoRef.current = false;
+        estoqueSujoRef.current = false;
+        dispatch({ type: "SET_TURNOS_FROM_DB", turnoAtivo, historico });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("Não foi possível carregar os turnos do Supabase (usando os dados deste aparelho):", e);
+      } finally {
+        turnosCarregadosRef.current = true;
+      }
     })();
 
     // 4) Carrega os registros de ponto (e o consumo de cada um) do Supabase
@@ -1417,81 +1597,137 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try { localStorage.setItem(MIGRACAO_KEY, "1"); } catch {}
       }
     })();
+
+    // 6) Produtos: preços, produtos cadastrados pelo dono, removidos e estoque
+    (async () => {
+      let migrar = false;
+      try { migrar = localStorage.getItem(MIGRACAO_PRODUTOS_KEY) !== "1"; } catch {}
+      const ok = await carregarProdutos(dispatch, localSalvo, migrar, () => { estoqueSujoRef.current = false; });
+      if (migrar && ok) {
+        try { localStorage.setItem(MIGRACAO_PRODUTOS_KEY, "1"); } catch {}
+      }
+    })();
   }, []);
 
-  // Sincroniza o turno em andamento com o Supabase sempre que ele muda (chegada, sobra, caixa,
-  // consumo, descarte, abertura, correção...). Espera só meio segundo após a última mudança
-  // antes de enviar — o bastante para não mandar uma chamada a cada tecla digitada, mas rápido
-  // o suficiente para não se perder se a pessoa fechar a aba logo em seguida.
+  // Sincroniza o turno em andamento com o Supabase quando ele é alterado neste aparelho (chegada, sobra,
+  // caixa, abertura, correção...). Espera meio segundo após a última mudança antes de enviar — o bastante
+  // para não mandar uma chamada a cada tecla, mas rápido o suficiente para não se perder se a aba fechar.
   const turnoAtivoAnteriorRef = useRef<Turno | null>(null);
   const turnoSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const flushSincronizacaoTurno = () => {
+  const cancelarSincronizacaoTurno = () => {
     if (turnoSyncTimerRef.current) {
       clearTimeout(turnoSyncTimerRef.current);
       turnoSyncTimerRef.current = null;
+    }
+  };
+
+  const flushSincronizacaoTurno = () => {
+    if (turnoSyncTimerRef.current) {
+      cancelarSincronizacaoTurno();
       if (turnoAtivoAnteriorRef.current) void sincronizarTurnoCompleto(turnoAtivoAnteriorRef.current);
     }
   };
 
   useEffect(() => {
-    const anterior = turnoAtivoAnteriorRef.current;
     turnoAtivoAnteriorRef.current = state.turnoAtivo;
-
-    if (state.turnoAtivo) {
-      const turno = state.turnoAtivo;
-      if (turnoSyncTimerRef.current) clearTimeout(turnoSyncTimerRef.current);
-      turnoSyncTimerRef.current = setTimeout(() => {
-        turnoSyncTimerRef.current = null;
-        void sincronizarTurnoCompleto(turno);
-      }, 500);
-    } else if (anterior && !state.historico.some((t) => t.id === anterior.id)) {
-      // O turno sumiu sem ter sido fechado (foi descartado) — remove do Supabase também
-      if (turnoSyncTimerRef.current) { clearTimeout(turnoSyncTimerRef.current); turnoSyncTimerRef.current = null; }
-      void excluirTurnoSupabase(anterior.id);
-    }
+    // Mudança que veio do carregamento (navegador ou banco) não é reenviada. Alterações feitas antes do
+    // banco responder ficam esperando: o que vier do banco vale.
+    if (!state.turnoAtivo || !turnoSujoRef.current || !turnosCarregadosRef.current) return;
+    turnoSujoRef.current = false;
+    const turno = state.turnoAtivo;
+    cancelarSincronizacaoTurno();
+    turnoSyncTimerRef.current = setTimeout(() => {
+      turnoSyncTimerRef.current = null;
+      void sincronizarTurnoCompleto(turno);
+    }, 500);
   }, [state.turnoAtivo]);
+
+  // Recarrega os produtos (preço, estoque) ao voltar para o app — o dono pode ter mudado algo em outro aparelho
+  const recarregarProdutos = () => {
+    void carregarProdutos(dispatch, {}, false, () => { estoqueSujoRef.current = false; });
+  };
 
   // Segurança extra: se a pessoa minimizar, trocar de app ou fechar a aba antes dos 500ms
   // terminarem, manda o que estiver pendente imediatamente, sem esperar.
   useEffect(() => {
     const flushTudo = () => { flushSincronizacaoTurno(); flushSyncPendentes(); };
-    const onVisibilityChange = () => { if (document.visibilityState === "hidden") flushTudo(); };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushTudo();
+      else recarregarProdutos();
+    };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pagehide", flushTudo);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("pagehide", flushTudo);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sincroniza o histórico com o Supabase sempre que um turno é fechado ou corrigido pelo dono.
-  const historicoCarregadoRef = useRef(false);
+  // Envia só os fechamentos que foram fechados ou corrigidos neste aparelho (não o histórico inteiro).
   useEffect(() => {
-    if (!historicoCarregadoRef.current) {
-      // Pula a primeira vez (é só o carregamento inicial vindo do próprio Supabase)
-      historicoCarregadoRef.current = true;
-      return;
+    const pendentes = histPendentesRef.current;
+    if (pendentes.size === 0) return;
+    for (const t of state.historico) {
+      if (pendentes.has(t.id)) {
+        pendentes.delete(t.id);
+        void sincronizarTurnoCompleto(t);
+      }
     }
-    for (const t of state.historico) void sincronizarTurnoCompleto(t);
   }, [state.historico]);
 
-  // Garante no banco os produtos cadastrados pelo dono (evita erro nas tabelas que dependem deles)
+  // Estoque: envia os produtos cuja quantidade/alerta mudou por uma ação feita aqui
   useEffect(() => {
-    if (state.bebidas.length === 0) return;
-    void sincronizarProdutosCadastrados(state.bebidas, state.precos);
-  }, [state.bebidas]);
+    const antes = estoqueBaseRef.current;
+    estoqueBaseRef.current = { q: state.estoqueQtd, m: state.estoqueMinimo };
+    if (!estoqueSujoRef.current) return;
+    estoqueSujoRef.current = false;
+    const ids = new Set([...Object.keys(state.estoqueQtd), ...Object.keys(state.estoqueMinimo)]);
+    for (const id of ids) {
+      if (antes.q[id] === state.estoqueQtd[id] && antes.m[id] === state.estoqueMinimo[id]) continue;
+      agendarSync(`estoque:${id}`, () => sincronizarEstoqueProduto(stateRef.current, id));
+    }
+  }, [state.estoqueQtd, state.estoqueMinimo]);
 
   // A tela sempre atualiza na hora (não espera a internet); o envio para o Supabase acontece
-  // em paralelo, "por trás", para as ações que já migramos.
+  // em paralelo, "por trás".
   const dispatchComSincronizacao: React.Dispatch<Action> = (a) => {
+    const antes = stateRef.current;
     dispatch(a);
-    if (a.type === "DELETE_TURNO") {
+    if (
+      a.type === "SET_ESTOQUE_QTD" || a.type === "SET_ESTOQUE_MINIMO" || a.type === "CLOSE_SHIFT" ||
+      a.type === "EDIT_HIST" || a.type === "EDIT_ATIVO" || a.type === "DELETE_TURNO"
+    ) {
+      estoqueSujoRef.current = true;
+    }
+    if (
+      a.type === "START_SHIFT" || a.type === "UPDATE_ITEM" || a.type === "SYNC_TURNO_ITEMS" ||
+      a.type === "UPDATE_CAIXA" || a.type === "UPDATE_MAQ" || a.type === "EDIT_ATIVO"
+    ) {
+      turnoSujoRef.current = true;
+    }
+
+    if (a.type === "CLOSE_SHIFT") {
+      // O envio pendente do turno aberto é cancelado: quem vai para o banco é a versão fechada
+      if (!antes.turnoAtivo) return;
+      cancelarSincronizacaoTurno();
+      turnoSujoRef.current = false;
+      histPendentesRef.current.add(antes.turnoAtivo.id);
+    } else if (a.type === "EDIT_HIST") {
+      histPendentesRef.current.add(a.id);
+    } else if (a.type === "DISCARD_SHIFT") {
+      if (!antes.turnoAtivo) return;
+      cancelarSincronizacaoTurno();
+      turnoSujoRef.current = false;
+      void excluirTurnoSupabase(antes.turnoAtivo.id);
+    } else if (a.type === "DELETE_TURNO") {
       // Remove do Supabase (os itens do turno somem junto) e cancela qualquer envio pendente dele
-      if (turnoSyncTimerRef.current && stateRef.current.turnoAtivo?.id === a.id) {
-        clearTimeout(turnoSyncTimerRef.current);
-        turnoSyncTimerRef.current = null;
+      if (antes.turnoAtivo?.id === a.id) {
+        cancelarSincronizacaoTurno();
+        turnoSujoRef.current = false;
       }
+      histPendentesRef.current.delete(a.id);
       void excluirTurnoSupabase(a.id);
     } else if (a.type === "ADD_FUNC" || a.type === "UPDATE_FUNC" || a.type === "REMOVE_FUNC") {
       void sincronizarFuncionario(a);
@@ -1499,6 +1735,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       void sincronizarPonto(a);
     } else if (a.type === "ADD_RETIRADA" || a.type === "REMOVE_RETIRADA") {
       void sincronizarRetirada(a);
+    } else if (a.type === "ADD_PRODUCT") {
+      // Produto novo vai para o banco junto com o preço (o estado ainda não tem o produto: monta na hora)
+      const s = { ...antes, bebidas: [...antes.bebidas, a.b], precos: { ...antes.precos, [a.b.id]: a.b.price } };
+      void sincronizarPrecoProduto(s, a.b.id);
+    } else if (a.type === "SET_PRICE") {
+      // Lê o preço na hora do envio (estado mais recente), então digitar "12" grava 12, não "1"
+      agendarSync(`preco:${a.productId}`, () => sincronizarPrecoProduto(stateRef.current, a.productId));
+    } else if (a.type === "REMOVE_PRODUCT") {
+      void removerProdutoSupabase(a.productId);
     } else if (a.type === "SET_DESCONTO_FUNCIONARIO") {
       // O valor é lido na hora do envio (estado mais recente), então digitar "30" grava 30, não "3"
       const chave = `desconto:${a.username}|${a.productId}`;

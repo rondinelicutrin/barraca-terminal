@@ -38,12 +38,19 @@ export function ConsumoModal({
         return p.freeForEmployee || q <= 0 ? s : s + q * (p.price / 2);
       }, 0);
 
+  // Com turno aberto, vale o estoque do próprio turno (entrada + chegada − descarte − consumo barraca).
+  // Antes também exigia a "quantidade em estoque" salva, que fica vazia/zerada no 1º turno, em produto
+  // novo ou quando a sobra anterior foi 0 — e bloqueava o consumo mesmo com mercadoria que acabou de chegar.
+  const semEstoque = (pid: string, limite: number) => {
+    if (!hasActiveTurno) return true;
+    if (items) return limite <= 0;
+    return (state.estoqueQtd[pid] ?? 0) <= 0;
+  };
+
   const handleChange = (pid: string, rawVal: string) => {
     const val = parseInt2(rawVal);
-    const semEstoqueGeral = (state.estoqueQtd[pid] ?? 0) <= 0;
     const limite = items ? limiteDisponivel(items[pid], "consumo") : 999;
-    const semEntradaOuSobra = !hasActiveTurno || (items != null && limite <= 0);
-    if ((semEstoqueGeral || semEntradaOuSobra) && val > 0) {
+    if (semEstoque(pid, limite) && val > 0) {
       alert("Sem estoque disponível para este produto.");
       return;
     }
@@ -67,9 +74,7 @@ export function ConsumoModal({
         <div className="space-y-1.5 mt-2">
           {products.map((p) => {
             const limite = items ? limiteDisponivel(items[p.id], "consumo") : 999;
-            const semEstoqueGeral = (state.estoqueQtd[p.id] ?? 0) <= 0;
-            const semEntradaOuSobra = !hasActiveTurno || (items != null && limite <= 0);
-            const indisponivel = semEstoqueGeral || semEntradaOuSobra;
+            const indisponivel = semEstoque(p.id, limite);
             const pct = username ? descontoPercentual(state, username, p) : 50;
             const limiteDesc = username ? limiteCategoriaFuncionario(state, username, p.category) : undefined;
             const precoComDesc = p.price * (1 - pct / 100);
