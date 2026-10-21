@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { useStore } from "@/lib/store";
+import { useStore, normalizarUsuario, type User } from "@/lib/store";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -21,27 +22,51 @@ function LoginPage() {
     }
   }, [state.currentUser, nav]);
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr("");
-    // Login mestre — sempre funciona, mesmo se o Supabase estiver fora do ar
-    if (u === "dono" && p === "barracaterminal") {
-      dispatch({ type: "LOGIN", user: { role: "owner", username: "dono", nome: "Dono" } });
-      nav({ to: "/owner" });
-      return;
-    }
-    const f = state.funcionarios.find((x) => x.username === u && x.password === p);
-    if (f && f.ativo === false) {
+  const [entrando, setEntrando] = useState(false);
+
+  const entrar = (user: User, ativo: boolean) => {
+    if (!ativo) {
       setErr("Acesso desativado. Fale com o administrador.");
       return;
     }
-    if (f) {
-      // "role" vem do cadastro em Equipe: administrador cadastrado ali também entra no Painel
-      dispatch({ type: "LOGIN", user: { role: f.role, username: f.username, nome: f.nome } });
-      nav({ to: f.role === "owner" ? "/owner" : "/turno" });
-      return;
+    // "role" vem do cadastro em Equipe: administrador cadastrado ali também entra no Painel
+    dispatch({ type: "LOGIN", user });
+    nav({ to: user.role === "owner" ? "/owner" : "/turno" });
+  };
+
+  // Login antigo (só enquanto o seguranca_login.sql não foi rodado no Supabase): confere aqui no aparelho.
+  // Depois do SQL, a senha do dono deixa de ser esta e as senhas não chegam mais ao app.
+  const entrarModoAntigo = () => {
+    if (u.trim().toLowerCase() === "dono" && p === "barracaterminal") {
+      return entrar({ role: "owner", username: "dono", nome: "Dono" }, true);
     }
+    const f = state.funcionarios.find((x) => normalizarUsuario(x.username) === normalizarUsuario(u) && x.password === p);
+    if (f) return entrar({ role: f.role, username: f.username, nome: f.nome }, f.ativo !== false);
     setErr("Usuário ou senha inválidos");
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr("");
+    if (!u.trim() || !p) { setErr("Preencha usuário e senha"); return; }
+    setEntrando(true);
+    try {
+      // A senha é conferida no banco (função verificar_login); o app nunca vê as senhas
+      const { data, error } = await supabase.rpc("verificar_login", { p_usuario: u, p_senha: p });
+      if (error) {
+        // Função ainda não criada no banco → usa o login antigo
+        if (error.code === "PGRST202" || error.code === "42883") return entrarModoAntigo();
+        setErr("Sem conexão com o servidor. Verifique a internet e tente de novo.");
+        return;
+      }
+      if (!data) { setErr("Usuário ou senha inválidos"); return; }
+      const r = data as { role: string; username: string; nome: string; ativo?: boolean };
+      entrar({ role: r.role === "owner" ? "owner" : "employee", username: r.username, nome: r.nome }, r.ativo !== false);
+    } catch {
+      setErr("Sem conexão com o servidor. Verifique a internet e tente de novo.");
+    } finally {
+      setEntrando(false);
+    }
   };
 
   return (
@@ -62,7 +87,7 @@ function LoginPage() {
             <Input type="password" value={p} onChange={(e) => setP(e.target.value)} />
           </div>
           {err && <p className="text-sm text-destructive">{err}</p>}
-          <Button type="submit" className="w-full">Entrar</Button>
+          <Button type="submit" className="w-full" disabled={entrando}>{entrando ? "Entrando..." : "Entrar"}</Button>
         </form>
       </div>
     </div>

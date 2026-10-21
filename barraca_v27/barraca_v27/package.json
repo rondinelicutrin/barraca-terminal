@@ -1,6 +1,6 @@
 {
   "name": "tanstack_start_ts",
-  "version": "27.0.0",
+  "version": "28.0.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -52,7 +52,7 @@
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
-    "jspdf": "^3.0.1",
+    "jspdf": "3.0.3",
     "lucide-react": "^0.575.0",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",

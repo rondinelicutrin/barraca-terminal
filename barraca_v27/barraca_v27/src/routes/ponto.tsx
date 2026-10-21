@@ -37,8 +37,9 @@ function PontoPage() {
   const nav = useNavigate();
 
   useEffect(() => {
+    if (!state.hidratado) return; // espera ler o login salvo (F5 não desloga)
     if (!state.currentUser) nav({ to: "/" });
-  }, [state.currentUser, nav]);
+  }, [state.hidratado, state.currentUser, nav]);
 
   // Ao abrir a tela, a data volta a ser a de hoje — mantém alinhado com o menu Turno e evita
   // ficar "preso" numa data antiga esquecida de uma sessão anterior.
@@ -49,7 +50,6 @@ function PontoPage() {
   }, [state.turnoAtivo?.date]);
 
   const me = state.currentUser;
-  if (!me) return null;
 
   const cg = state.configGeral;
 
@@ -107,6 +107,9 @@ function PontoPage() {
     setColegas(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnoAtivo?.date, turnoAtivo?.shift, state.funcionarios.length]);
+
+  // Só depois de todos os hooks: sair antes deles fazia o React quebrar ao recarregar a página (F5)
+  if (!me) return null;
 
   const hours = hoursBetween(entrada, saida);
 
@@ -462,7 +465,7 @@ function PontoPage() {
         username={showConsumoColega ?? undefined}
         onSave={(v) => {
           if (!showConsumoColega) return;
-          setConsumoColegas((prev) => ({ ...prev, [showConsumoColega]: v }));
+          setConsumoColegas({ ...consumoColegas, [showConsumoColega]: v });
         }}
       />
       {state.turnoAtivo && (
