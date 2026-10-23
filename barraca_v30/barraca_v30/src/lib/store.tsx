@@ -138,6 +138,13 @@ export function movimentosDinheiro(lista: Retirada[]): { retirado: number; inclu
   return { retirado, incluido };
 }
 
+// Adicional/desconto de UMA semana de um funcionário (lançado no fechamento semanal da folha)
+export interface AjusteFolha {
+  adicional: number;
+  desconto: number;
+  observacao?: string;
+}
+
 export interface TaxasMaquininha {
   maq1: number; // percentual cobrado pela maquininha 1 (taxa da operadora)
   maq2: number;
@@ -169,6 +176,7 @@ export interface State {
   descontosPorFuncionario: Record<string, Record<string, DescontoConfig>>;
   retiradas: Retirada[]; // retiradas de dinheiro do caixa (com motivo)
   taxasMaquininha: TaxasMaquininha; // percentual cobrado por cada maquininha
+  ajustesFolha: Record<string, AjusteFolha>; // "username|segunda-feira da semana" -> ajuste da semana
   // true depois que o login e os dados guardados no navegador foram lidos. Até lá as telas não
   // redirecionam ninguém — antes, recarregar a página (F5) jogava o usuário para o login/Painel.
   hidratado?: boolean;
@@ -195,6 +203,7 @@ const initialState = (): State => {
     descontosPorFuncionario: {},
     retiradas: [],
     taxasMaquininha: { maq1: 0, maq2: 0 },
+    ajustesFolha: {},
   };
 };
 
@@ -242,6 +251,8 @@ type Action =
   | { type: "ADD_RETIRADA"; r: Retirada }
   | { type: "REMOVE_RETIRADA"; id: string }
   | { type: "SET_TAXAS_MAQUININHA"; patch: Partial<TaxasMaquininha> }
+  | { type: "SET_AJUSTE_FOLHA"; username: string; semana: string; patch: Partial<AjusteFolha> }
+  | { type: "SET_AJUSTES_FOLHA_FROM_DB"; ajustes: Record<string, AjusteFolha> }
   | { type: "ADD_PRODUCT"; b: Product }
   | { type: "REMOVE_PRODUCT"; productId: string };
 
@@ -543,6 +554,7 @@ function reducer(s: State, a: Action): State {
       if (!migrated.descontosPorFuncionario) migrated.descontosPorFuncionario = {};
       if (!migrated.retiradas) migrated.retiradas = [];
       if (!migrated.taxasMaquininha) migrated.taxasMaquininha = { maq1: 0, maq2: 0 };
+      if (!migrated.ajustesFolha) migrated.ajustesFolha = {};
       if (migrated.turnoAtivo) {
         const c = migrated.turnoAtivo.caixa as any;
         if (c.dinheiro !== undefined && c.dinheiroFinal === undefined) {
@@ -828,6 +840,15 @@ function reducer(s: State, a: Action): State {
       n = { ...s, retiradas: s.retiradas.filter((r) => r.id !== a.id) }; break;
     case "SET_TAXAS_MAQUININHA":
       n = { ...s, taxasMaquininha: { ...s.taxasMaquininha, ...a.patch } }; break;
+    case "SET_AJUSTE_FOLHA": {
+      const k = `${a.username}|${a.semana}`;
+      const atual = s.ajustesFolha[k] ?? { adicional: 0, desconto: 0 };
+      n = { ...s, ajustesFolha: { ...s.ajustesFolha, [k]: { ...atual, ...a.patch } } };
+      break;
+    }
+    case "SET_AJUSTES_FOLHA_FROM_DB":
+      // Mantém os ajustes feitos aqui que ainda não chegaram ao banco; o banco vale para o resto
+      n = { ...s, ajustesFolha: { ...s.ajustesFolha, ...a.ajustes } }; break;
     case "ADD_PRODUCT":
       n = { ...s, bebidas: [...s.bebidas, a.b], precos: { ...s.precos, [a.b.id]: a.b.price } }; break;
     case "REMOVE_PRODUCT":
@@ -1514,6 +1535,51 @@ async function carregarProdutos(
   return ok;
 }
 
+// ---- Ajustes semanais da folha (tabela "folha_ajustes", criada pelo folha_semanal.sql) ----
+const tabelaFaltando = (e: any) =>
+  e?.code === "42P01" || e?.code === "PGRST205" || /relation .* does not exist|Could not find the table/i.test(String(e?.message ?? ""));
+let avisouSqlFolha = false;
+
+async function carregarAjustesFolha(dispatch: React.Dispatch<Action>) {
+  const { data, error } = await supabase.from("folha_ajustes").select("*");
+  if (error) {
+    // eslint-disable-next-line no-console
+    if (!tabelaFaltando(error)) console.error("Não foi possível carregar os ajustes da folha do Supabase:", error);
+    return;
+  }
+  const ajustes: Record<string, AjusteFolha> = {};
+  for (const r of data ?? []) {
+    ajustes[`${r.employee_username}|${String(r.semana_inicio).slice(0, 10)}`] = {
+      adicional: Number(r.adicional) || 0,
+      desconto: Number(r.desconto) || 0,
+      observacao: r.observacao ?? undefined,
+    };
+  }
+  dispatch({ type: "SET_AJUSTES_FOLHA_FROM_DB", ajustes });
+}
+
+async function sincronizarAjusteFolha(s: State, username: string, semana: string) {
+  const a = s.ajustesFolha[`${username}|${semana}`];
+  if (!a) return;
+  try {
+    const { error } = await supabase.from("folha_ajustes").upsert({
+      employee_username: username, semana_inicio: semana,
+      adicional: a.adicional || 0, desconto: a.desconto || 0, observacao: a.observacao?.trim() || null,
+    }, { onConflict: "employee_username,semana_inicio" });
+    if (error) throw error;
+  } catch (e) {
+    if (tabelaFaltando(e)) {
+      if (!avisouSqlFolha) {
+        avisouSqlFolha = true;
+        alert("Para salvar o adicional/desconto da semana no banco, rode o arquivo folha_semanal.sql no SQL Editor do Supabase (até lá ele vale só neste aparelho).");
+      }
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.error("Não foi possível salvar o ajuste da folha no Supabase:", e);
+  }
+}
+
 const raw0 = (salvo: Partial<State>): State | null =>
   Object.keys(salvo).length > 0 ? { ...initialState(), ...salvo } : null;
 
@@ -1637,6 +1703,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try { localStorage.setItem(MIGRACAO_KEY, "1"); } catch {}
       }
     })();
+
+    // 7) Adicional/desconto de cada semana (fechamento semanal da folha)
+    void carregarAjustesFolha(dispatch);
 
     // 6) Produtos: preços, produtos cadastrados pelo dono, removidos e estoque
     (async () => {
@@ -1814,6 +1883,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           console.error("Não foi possível remover o desconto no Supabase:", e);
         }
       });
+    } else if (a.type === "SET_AJUSTE_FOLHA") {
+      // Lido na hora do envio: digitar "30" grava 30, não "3"
+      agendarSync(`ajuste:${a.username}|${a.semana}`, () => sincronizarAjusteFolha(stateRef.current, a.username, a.semana));
     } else if (a.type === "SET_CONFIG_GERAL" || a.type === "SET_TAXAS_MAQUININHA") {
       agendarSync("config_geral", async () => {
         const st = stateRef.current;

@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import {
   useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina,
@@ -23,6 +23,17 @@ function EditTurno() {
   const orig = isAtivo ? state.turnoAtivo : state.historico.find((t) => t.id === id);
   const [tab, setTab] = useState<"produtos" | "caixa">("produtos");
   const [local, setLocal] = useState<Turno | null>(orig ?? null);
+  // Ao recarregar a página (F5) o turno ainda não veio do banco na primeira exibição: assim que
+  // chegar, carrega no formulário (antes ficava preso em "Turno não encontrado").
+  useEffect(() => {
+    if (!local && orig) setLocal(orig);
+  }, [local, orig]);
+
+  // Calculados antes de qualquer "return" (hooks sempre na mesma ordem — senão o React quebra)
+  const products = getAllProducts(state);
+  // useLivePrice=true: ao corrigir um turno, usamos os preços atuais (já corrigidos pelo dono)
+  const esperado = useMemo(() => (local ? esperadoTurno(local, products, true) : 0), [local, products]);
+  const arrec = useMemo(() => (local ? arrecadadoTurno(local) : 0), [local]);
 
   if (!orig || !local) {
     return (
@@ -34,10 +45,6 @@ function EditTurno() {
     );
   }
 
-  const products = getAllProducts(state);
-  // useLivePrice=true: ao corrigir um turno, usamos os preços atuais (já corrigidos pelo dono)
-  const esperado = useMemo(() => esperadoTurno(local, products, true), [local, products]);
-  const arrec = useMemo(() => arrecadadoTurno(local), [local]);
   const diff = arrec - esperado;
 
   const updItem = (pid: string, patch: Partial<ShiftItem>) =>

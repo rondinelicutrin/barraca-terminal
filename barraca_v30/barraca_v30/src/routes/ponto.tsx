@@ -6,7 +6,7 @@ import { useFiltro } from "@/lib/filtros";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
-import { ConsumoModal, DescarteModal, collectDescarte } from "@/components/Modals";
+import { ConsumoModal, DescarteModal, collectDescarte, somarConsumo } from "@/components/Modals";
 import { FechamentoTurno, TurnoFechadoScreen } from "@/components/FechamentoTurno";
 
 export const Route = createFileRoute("/ponto")({
@@ -70,15 +70,18 @@ function PontoPage() {
   const dataDiferente = date !== hoje;
   // Rascunhos do que ainda não foi registrado ficam guardados ao trocar de menu (e ao recarregar a página),
   // para não precisar lançar tudo de novo.
-  const [entrada, setEntrada]   = useFiltro("ponto.entrada", "18:00");
-  const [saida, setSaida]       = useFiltro("ponto.saida", "23:00");
-  const [euPonto, setEuPonto]   = useFiltro("ponto.euPonto", true);
-  const [euConsumir, setEuConsumir] = useFiltro("ponto.euConsumir", false);
+  // Rascunhos separados por usuário: no mesmo tablet, quem entra depois não vê (nem registra) o
+  // rascunho de quem estava antes.
+  const rascunho = `ponto.${me?.username ?? ""}`;
+  const [entrada, setEntrada]   = useFiltro(`${rascunho}.entrada`, "18:00");
+  const [saida, setSaida]       = useFiltro(`${rascunho}.saida`, "23:00");
+  const [euPonto, setEuPonto]   = useFiltro(`${rascunho}.euPonto`, true);
+  const [euConsumir, setEuConsumir] = useFiltro(`${rascunho}.euConsumir`, false);
   // Colegas: mapa username -> { nome, registrar (ponto), consumir (lançar consumo), entrada, saida }
   type Colega = { nome: string; registrar: boolean; consumir?: boolean; entrada: string; saida: string };
-  const [colegas, setColegas] = useFiltro<Record<string, Colega>>("ponto.colegas", {});
-  const [consumo, setConsumo]   = useFiltro<Record<string, number>>("ponto.consumo", {});
-  const [consumoColegas, setConsumoColegas] = useFiltro<Record<string, Record<string, number>>>("ponto.consumoColegas", {});
+  const [colegas, setColegas] = useFiltro<Record<string, Colega>>(`${rascunho}.colegas`, {});
+  const [consumo, setConsumo]   = useFiltro<Record<string, number>>(`${rascunho}.consumo`, {});
+  const [consumoColegas, setConsumoColegas] = useFiltro<Record<string, Record<string, number>>>(`${rascunho}.consumoColegas`, {});
   // Período do "Consumo por período" também é lembrado
   const [perFrom, setPerFrom] = useFiltro("ponto.perFrom", () => state.selectedDate);
   const [perTo, setPerTo] = useFiltro("ponto.perTo", () => state.selectedDate);
@@ -90,7 +93,7 @@ function PontoPage() {
   // Com turno aberto, já deixa marcados (com "registrar ponto") todos que estão nele além de mim —
   // antes era preciso marcar um por um, e quem ficava de fora travava o fechamento.
   const turnoAtivo = state.turnoAtivo;
-  const [prefillFeito, setPrefillFeito] = useFiltro<string>("ponto.prefill", "");
+  const [prefillFeito, setPrefillFeito] = useFiltro<string>(`${rascunho}.prefill`, "");
   useEffect(() => {
     if (!turnoAtivo || !me) return;
     const chave = `${turnoAtivo.date}|${turnoAtivo.shift}`;
@@ -137,6 +140,9 @@ function PontoPage() {
   }
 
   const qtdItens = (m: Record<string, number>) => Object.values(m).reduce((s, n) => s + n, 0);
+  const nomeMe = state.funcionarios.find((f) => f.username === me.username)?.nome ?? me.username;
+  // Tudo que já foi lançado (e ainda não registrado) para todas as pessoas: conta no limite de estoque
+  const reservadoTotal = [consumo, ...Object.values(consumoColegas)].reduce(somarConsumo, {});
   const nomeProduto = (id: string) => getAllProducts(state).find((x) => x.id === id)?.name ?? id;
   // Lista curta do que foi lançado (aparece logo abaixo do botão de cada pessoa)
   const ResumoItens = ({ itens, vazio }: { itens: Record<string, number>; vazio?: string }) => {
@@ -182,6 +188,14 @@ function PontoPage() {
         `ATENÇÃO: VOCÊ ESTÁ REGISTRANDO COM A DATA ${dataBR}, DIFERENTE DE HOJE (${hoje.split("-").reverse().join("/")}).\n\nTEM CERTEZA QUE É ISSO MESMO?`
       );
       if (!ok) return;
+    }
+
+    // Confirma para quem vai cada consumo antes de registrar (evita lançar o consumo de um no nome de outro)
+    const comItens = alvos.filter((a) => a.itens.length > 0);
+    if (comItens.length > 0) {
+      const linhas = comItens.map((a) =>
+        `• ${nomeDe(a.username).toUpperCase()}: ${a.itens.map((c) => `${c.qty}× ${nomeProduto(c.productId)}`).join(", ")}`);
+      if (!confirm(`CONFIRA O CONSUMO DE CADA PESSOA:\n\n${linhas.join("\n")}\n\nEstá certo?`)) return;
     }
 
     const duplicados = querPonto.filter((a) => jaBateu(a.username, a.ent)).map((a) => a.username);
@@ -406,9 +420,15 @@ function PontoPage() {
                       className="w-full"
                       onClick={() => setShowConsumoColega(username)}
                     >
-                      🍽 Consumo de {col.nome} ({qtdItens(consumoColegas[username] ?? {})} itens)
+                      🍽 Lançar consumo de {col.nome} ({qtdItens(consumoColegas[username] ?? {})} itens)
                     </Button>
                     {ResumoItens({ itens: consumoColegas[username] ?? {} })}
+                    {qtdItens(consumoColegas[username] ?? {}) > 0 && (
+                      <button type="button" className="text-[11px] text-muted-foreground hover:text-destructive"
+                        onClick={() => setConsumoColegas({ ...consumoColegas, [username]: {} })}>
+                        Limpar consumo de {col.nome}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -420,9 +440,14 @@ function PontoPage() {
           {euConsumir && (
             <div className="space-y-1.5">
               <Button variant="secondary" className="w-full" onClick={() => setShowConsumo(true)}>
-                🍽 Meu consumo ({qtdItens(consumo)})
+                🍽 Lançar consumo de {nomeMe} (você) ({qtdItens(consumo)})
               </Button>
               {ResumoItens({ itens: consumo })}
+              {qtdItens(consumo) > 0 && (
+                <button type="button" className="text-[11px] text-muted-foreground hover:text-destructive" onClick={() => setConsumo({})}>
+                  Limpar meu consumo
+                </button>
+              )}
             </div>
           )}
           <div className="space-y-1.5">
@@ -450,22 +475,24 @@ function PontoPage() {
       <ConsumoModal
         open={showConsumo}
         onOpenChange={setShowConsumo}
-        values={consumo}
         items={state.turnoAtivo?.items}
         hasActiveTurno={!!state.turnoAtivo}
         username={me.username}
-        onSave={setConsumo}
+        nomePessoa={`${nomeMe} (você)`}
+        reservado={reservadoTotal}
+        onSave={(v) => setConsumo(somarConsumo(consumo, v))}
       />
       <ConsumoModal
         open={showConsumoColega != null}
         onOpenChange={(v) => { if (!v) setShowConsumoColega(null); }}
-        values={showConsumoColega ? (consumoColegas[showConsumoColega] ?? {}) : {}}
         items={state.turnoAtivo?.items}
         hasActiveTurno={!!state.turnoAtivo}
         username={showConsumoColega ?? undefined}
+        nomePessoa={showConsumoColega ? (colegas[showConsumoColega]?.nome ?? showConsumoColega) : undefined}
+        reservado={reservadoTotal}
         onSave={(v) => {
           if (!showConsumoColega) return;
-          setConsumoColegas({ ...consumoColegas, [showConsumoColega]: v });
+          setConsumoColegas({ ...consumoColegas, [showConsumoColega]: somarConsumo(consumoColegas[showConsumoColega] ?? {}, v) });
         }}
       />
       {state.turnoAtivo && (

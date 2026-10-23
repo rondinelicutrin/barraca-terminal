@@ -2,6 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, valorConsumoPonto, ehSoConsumo, normalizarUsuario, type Funcionario } from "@/lib/store";
+import { calcularFolha, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, type Folha } from "@/lib/folha";
+import { SemanaPicker } from "@/components/SemanaPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
@@ -70,7 +72,7 @@ function Funcionarios() {
           <div className="flex items-center gap-2.5 flex-wrap justify-end">
             <Link to="/owner/descontos" className="text-xs text-primary">🏷️ Descontos</Link>
             <button onClick={() => setShowRelatorio(true)} className="text-xs text-primary">📊 Relatório</button>
-            <button onClick={() => setShowFolha(true)} className="text-xs text-primary">📋 Folha</button>
+            <button onClick={() => setShowFolha(true)} className="text-xs text-primary">📋 Folha semanal</button>
           </div>
         }
       />
@@ -172,47 +174,137 @@ function Funcionarios() {
   );
 }
 
-// Cálculo padrão de folha: horas + diária + transporte + refeição (benefícios pagos ao
-// funcionário), menos consumo/desconto, mais adicional
-function calcularFolha(state: ReturnType<typeof useStore>["state"], f: Funcionario, meus: ReturnType<typeof useStore>["state"]["pontos"], products: ReturnType<typeof getAllProducts>) {
-  let horas = 0, transp = 0, ref = 0, consumo = 0;
-  const dias = new Set<string>();
-  for (const p of meus) {
-    if (ehSoConsumo(p)) { consumo += valorConsumoPonto(state, f.username, p.consumo); continue; }
-    horas += hoursBetween(p.entrada, p.saida);
-    transp += p.transporte;
-    ref += p.refeicao;
-    dias.add(p.date);
-    consumo += valorConsumoPonto(state, f.username, p.consumo);
-  }
-  const diasTrabalhados = dias.size;
-  const bruto = horas * f.taxaHora + diasTrabalhados * (f.valorDiaria ?? 0);
-  const desconto = f.desconto ?? 0;
-  const adicional = f.adicional ?? 0;
-  // Transporte e refeição são benefícios pagos ao funcionário: somam no valor a receber.
-  // Consumo e desconto são deduções: subtraem. Adicional soma.
-  const liquido = Math.max(0, bruto + transp + ref - consumo - desconto + adicional);
-  return { horas, diasTrabalhados, transp, ref, consumo, bruto, desconto, adicional, liquido };
+// Blocos de detalhe usados no diálogo do funcionário e na folha semanal: dias trabalhados e consumo
+// item a item (o funcionário pode questionar o desconto — aqui está de onde vem cada valor).
+function DetalheFolha({ calc }: { calc: Folha }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="text-xs font-semibold mb-1">Dias trabalhados ({calc.diasTrabalhados})</div>
+        {calc.dias.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground">Nenhum ponto no período.</div>
+        ) : (
+          <div className="text-[11px] mono space-y-0.5">
+            {calc.dias.map((d, i) => (
+              <div key={i} className="flex justify-between">
+                <span>{formatDateBR(d.date)} · {d.entrada}–{d.saida}</span><span>{d.horas.toFixed(2)}h</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div>
+        <div className="text-xs font-semibold mb-1">Consumo por produto</div>
+        {calc.consumoPorProduto.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground">Nenhum consumo no período.</div>
+        ) : (
+          <table className="w-full text-[11px]">
+            <thead><tr className="text-muted-foreground"><th className="text-left font-normal">Produto</th><th className="text-right font-normal">Qtd</th><th className="text-right font-normal">Valor</th></tr></thead>
+            <tbody>
+              {calc.consumoPorProduto.map((c) => (
+                <tr key={c.nome} className="border-t border-border/40"><td>{c.nome}</td><td className="text-right mono">{c.qty}</td><td className="text-right mono">{BRL(c.valor)}</td></tr>
+              ))}
+              <tr className="border-t border-border font-semibold"><td>Total</td><td /><td className="text-right mono">{BRL(calc.consumo)}</td></tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+      {calc.consumoDetalhe.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold mb-1">Consumo dia a dia</div>
+          <div className="space-y-1.5">
+            {calc.consumoDetalhe.map((d) => (
+              <div key={d.pontoId} className="bg-background border border-border/60 rounded-md p-2 text-[11px]">
+                <div className="text-muted-foreground mb-0.5">{formatDateBR(d.date)}</div>
+                {d.itens.map((i) => (
+                  <div key={i.productId} className="flex justify-between"><span>{i.qty}× {i.nome}</span><span className="mono">{BRL(i.valor)}</span></div>
+                ))}
+                <div className="flex justify-between font-medium mt-0.5"><span>Subtotal</span><span className="mono">{BRL(d.subtotal)}</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
+// Linhas do valor a receber (mesma ordem no diálogo, na folha semanal e nos relatórios).
+// Valor com sinal: positivo soma, negativo desconta.
+function linhasValorNum(calc: Folha, f: Funcionario): [string, number][] {
+  const l: [string, number][] = [[`Horas: ${calc.horas.toFixed(2)}h × ${BRL(f.taxaHora)}`, calc.valorHoras]];
+  if (calc.valorDiarias > 0) l.push([`Diárias: ${calc.diasTrabalhados} × ${BRL(f.valorDiaria ?? 0)}`, calc.valorDiarias]);
+  l.push(["Transporte", calc.transp]);
+  l.push(["Refeição", calc.ref]);
+  if (calc.adicionalFixo > 0) l.push(["Adicional fixo", calc.adicionalFixo]);
+  if (calc.adicionalSemana > 0) l.push(["Adicional da semana", calc.adicionalSemana]);
+  l.push(["Consumo", -calc.consumo]);
+  if (calc.descontoFixo > 0) l.push(["Desconto fixo", -calc.descontoFixo]);
+  if (calc.descontoSemana > 0) l.push(["Desconto da semana", -calc.descontoSemana]);
+  return l;
+}
+const linhasValor = (calc: Folha, f: Funcionario): [string, string][] =>
+  linhasValorNum(calc, f).map(([k, v]) => [k, `${v < 0 ? "-" : "+"}${BRL(Math.abs(v))}`]);
+
+// Seções de PDF com o detalhe de um funcionário (valor a receber, dias e consumo item a item)
+function secoesPdfFuncionario(calc: Folha, f: Funcionario, titulo?: string) {
+  return [
+    {
+      heading: titulo,
+      columns: ["Item", "Valor"],
+      rows: [...linhasValor(calc, f), ...calc.observacoes.map((o) => ["Obs.", o] as [string, string])],
+      totalRow: ["Valor a receber", BRL(calc.liquido)],
+    },
+    {
+      heading: "Dias trabalhados",
+      columns: ["Data", "Entrada", "Saída", "Horas"],
+      rows: calc.dias.map((d) => [formatDateBR(d.date), d.entrada, d.saida, d.horas.toFixed(2)]),
+    },
+    {
+      heading: "Consumo por produto",
+      columns: ["Produto", "Qtd", "Valor"],
+      rows: calc.consumoPorProduto.map((c) => [c.nome, String(c.qty), BRL(c.valor)]),
+      totalRow: ["Total", "", BRL(calc.consumo)],
+    },
+    {
+      heading: "Consumo dia a dia",
+      columns: ["Data", "Produto", "Qtd", "Valor"],
+      rows: calc.consumoDetalhe.flatMap((d) => d.itens.map((i) => [formatDateBR(d.date), i.nome, String(i.qty), BRL(i.valor)])),
+    },
+  ];
+}
+
+// Linhas de CSV com o detalhe de um funcionário
+function linhasCsvFuncionario(calc: Folha, f: Funcionario, periodo: string): (string | number)[][] {
+  const out: (string | number)[][] = [];
+  out.push([f.nome, periodo, "RESUMO", "", "", calc.liquido.toFixed(2)]);
+  for (const [k, v] of linhasValorNum(calc, f)) out.push([f.nome, periodo, "Valor", k, "", v.toFixed(2)]);
+  for (const d of calc.dias) out.push([f.nome, periodo, "Dia trabalhado", `${formatDateBR(d.date)} ${d.entrada}-${d.saida}`, d.horas.toFixed(2), ""]);
+  for (const d of calc.consumoDetalhe) {
+    for (const i of d.itens) out.push([f.nome, periodo, "Consumo", `${formatDateBR(d.date)} ${i.nome}`, i.qty, i.valor.toFixed(2)]);
+  }
+  return out;
+}
+const CSV_CAB = ["Funcionário", "Período", "Tipo", "Descrição", "Qtd/Horas", "Valor (R$)"];
+
 // Diálogo de edição de um funcionário: valores pessoais de transporte/refeição, taxa por hora,
-// diária, desconto, adicional — e o valor a receber calculado para o período selecionado.
+// diária, desconto, adicional — e o valor a receber (com dias e consumo detalhados) no período.
 function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId: string | null; onOpenChange: (v: boolean) => void }) {
   const { state, dispatch } = useStore();
-  const products = getAllProducts(state);
   const f = state.funcionarios.find((x) => x.id === funcionarioId) ?? null;
   const cg = state.configGeral;
 
-  const [from, setFrom] = useFiltro("folha.from", () => {
-    const d = new Date(); d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
-  });
-  const [to, setTo] = useFiltro("folha.to", todayISO());
+  // Padrão: a semana passada (seg a dom), que é a que se paga na segunda-feira
+  const [from, setFrom] = useFiltro("func.from", () => semanaPassada());
+  const [to, setTo] = useFiltro("func.to", () => fimSemana(semanaPassada()));
+  const irParaSemana = (segunda: string) => { setFrom(segunda); setTo(fimSemana(segunda)); };
+  const ehSemana = from === inicioSemana(from) && to === fimSemana(from);
 
   if (!f) return null;
 
-  const meus = state.pontos.filter((p) => p.employeeUsername === f.username && p.date >= from && p.date <= to);
-  const calc = calcularFolha(state, f, meus, products);
+  const meus = pontosDoPeriodo(state, f.username, from, to);
+  const calc = calcularFolha(state, f, meus, from, to);
+  const periodo = `${formatDateBR(from)} a ${formatDateBR(to)}`;
 
   const upd = (patch: Partial<Funcionario>) => dispatch({ type: "UPDATE_FUNC", id: f.id, patch });
 
@@ -224,36 +316,15 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
   };
 
   const baixarCsvArquivo = () => {
-    baixarCsv(
-      `valor-a-receber-${f.username}-${from}-a-${to}.csv`,
-      ["Funcionário", "Período", "Horas", "Dias", "Bruto", "Transporte", "Refeição", "Consumo", "Desconto", "Adicional", "Valor a receber"],
-      [[
-        f.nome, `${formatDateBR(from)} a ${formatDateBR(to)}`, calc.horas.toFixed(2), calc.diasTrabalhados,
-        calc.bruto.toFixed(2), calc.transp.toFixed(2), calc.ref.toFixed(2), calc.consumo.toFixed(2),
-        calc.desconto.toFixed(2), calc.adicional.toFixed(2), calc.liquido.toFixed(2),
-      ]],
-    );
+    baixarCsv(`valor-a-receber-${f.username}-${from}-a-${to}.csv`, CSV_CAB, linhasCsvFuncionario(calc, f, periodo));
   };
 
   const baixarPdfArquivo = () => {
     gerarRelatorioPdf({
       filename: `valor-a-receber-${f.username}-${from}-a-${to}.pdf`,
       title: `Valor a receber — ${f.nome}`,
-      subtitle: `${formatDateBR(from)} a ${formatDateBR(to)}`,
-      sections: [{
-        columns: ["Item", "Valor"],
-        rows: [
-          ["Horas trabalhadas", calc.horas.toFixed(2)],
-          ["Dias trabalhados", String(calc.diasTrabalhados)],
-          ["Bruto (horas + diária)", `R$ ${calc.bruto.toFixed(2)}`],
-          ["Transporte (+)", `R$ ${calc.transp.toFixed(2)}`],
-          ["Refeição (+)", `R$ ${calc.ref.toFixed(2)}`],
-          ["Consumo (-)", `R$ ${calc.consumo.toFixed(2)}`],
-          ["Desconto (-)", `R$ ${calc.desconto.toFixed(2)}`],
-          ["Adicional (+)", `R$ ${calc.adicional.toFixed(2)}`],
-        ],
-        totalRow: ["Valor a receber", `R$ ${calc.liquido.toFixed(2)}`],
-      }],
+      subtitle: periodo,
+      sections: secoesPdfFuncionario(calc, f),
     });
   };
 
@@ -298,9 +369,13 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
               {campo("Valor por diária (R$)", f.valorDiaria ?? 0, (n) => upd({ valorDiaria: n }))}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {campo("Desconto (R$)", f.desconto ?? 0, (n) => upd({ desconto: n }))}
-              {campo("Adicional (R$)", f.adicional ?? 0, (n) => upd({ adicional: n }))}
+              {campo("Desconto fixo/semana (R$)", f.desconto ?? 0, (n) => upd({ desconto: n }))}
+              {campo("Adicional fixo/semana (R$)", f.adicional ?? 0, (n) => upd({ adicional: n }))}
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              Fixos: valem para toda semana em que a pessoa trabalhou. Para um valor só de uma semana, use
+              Equipe → 📋 Folha semanal.
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -317,7 +392,8 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
           </div>
 
           <div className="space-y-2 border-t border-border pt-3">
-            <h3 className="text-sm font-semibold">Valor a receber</h3>
+            <h3 className="text-sm font-semibold">Valor a receber e consumo detalhado</h3>
+            <SemanaPicker inicio={ehSemana ? from : inicioSemana(from)} onChange={irParaSemana} />
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-xs text-muted-foreground">De</label>
@@ -329,18 +405,16 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
               </div>
             </div>
             <div className="bg-background border border-border rounded-lg p-3 text-xs text-muted-foreground mono space-y-0.5">
-              <div className="flex justify-between"><span>Horas: {calc.horas.toFixed(2)}</span><span>Dias: {calc.diasTrabalhados}</span></div>
-              <div className="flex justify-between"><span>Bruto</span><span>{BRL(calc.bruto)}</span></div>
-              <div className="flex justify-between"><span>Transporte</span><span>+{BRL(calc.transp)}</span></div>
-              <div className="flex justify-between"><span>Refeição</span><span>+{BRL(calc.ref)}</span></div>
-              <div className="flex justify-between"><span>Consumo</span><span>-{BRL(calc.consumo)}</span></div>
-              <div className="flex justify-between"><span>Desconto</span><span>-{BRL(calc.desconto)}</span></div>
-              <div className="flex justify-between"><span>Adicional</span><span>+{BRL(calc.adicional)}</span></div>
+              {linhasValor(calc, f).map(([k, v]) => (
+                <div key={k} className="flex justify-between"><span>{k}</span><span>{v}</span></div>
+              ))}
+              {calc.observacoes.map((o, i) => <div key={i} className="text-[11px]">Obs.: {o}</div>)}
             </div>
             <div className="flex justify-between items-center text-sm font-semibold">
               <span>Valor a receber</span>
               <span className="mono text-primary text-lg">{BRL(calc.liquido)}</span>
             </div>
+            <DetalheFolha calc={calc} />
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={baixarPdfArquivo}>📄 PDF</Button>
               <Button variant="secondary" onClick={baixarCsvArquivo}>📊 CSV</Button>
@@ -356,83 +430,117 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
   );
 }
 
+// Fechamento semanal da folha (seg a dom, pago na segunda seguinte): para cada funcionário, os dias
+// trabalhados, o consumo item a item e o valor a receber já calculado. Adicional e desconto da semana
+// são lançados aqui e ficam guardados para aquela semana.
 function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { state } = useStore();
-  const [from, setFrom] = useFiltro("relatorio.from", () => {
-    const d = new Date(); d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
-  });
-  const [to, setTo] = useFiltro("relatorio.to", todayISO());
+  const { state, dispatch } = useStore();
+  const [semana, setSemana] = useFiltro("folha.semana", () => semanaPassada());
+  const from = semana, to = fimSemana(semana);
+  const periodo = `${formatDateBR(from)} a ${formatDateBR(to)}`;
 
-  const products = getAllProducts(state);
-  const rows = useMemo(() => {
-    const pontos = state.pontos.filter((p) => p.date >= from && p.date <= to);
-    return state.funcionarios.map((f) => {
-      const meus = pontos.filter((p) => p.employeeUsername === f.username);
-      const calc = calcularFolha(state, f, meus, products);
-      return { f, ...calc, meus };
-    });
-  }, [state, from, to, products]);
+  const rows = useMemo(() => state.funcionarios
+    .map((f) => {
+      const meus = pontosDoPeriodo(state, f.username, from, to);
+      const calc = calcularFolha(state, f, meus, from, to);
+      const temAlgo = calc.dias.length > 0 || calc.consumo > 0 || calc.adicionalSemana > 0 || calc.descontoSemana > 0;
+      return { f, calc, temAlgo };
+    })
+    .filter((r) => r.temAlgo || r.f.ativo !== false)
+    .sort((a, b) => Number(b.temAlgo) - Number(a.temAlgo) || a.f.nome.localeCompare(b.f.nome)),
+  [state, from, to]);
+
+  const totalPagar = rows.reduce((s, r) => s + r.calc.liquido, 0);
+  const ajuste = (username: string) => state.ajustesFolha[chaveAjuste(username, semana)];
+  const setAjuste = (username: string, patch: { adicional?: number; desconto?: number; observacao?: string }) =>
+    dispatch({ type: "SET_AJUSTE_FOLHA", username, semana, patch });
 
   const exportCSV = () => {
-    baixarCsv(
-      `folha_${from}_${to}.csv`,
-      ["Funcionário", "Horas", "Dias", "Bruto", "Transporte", "Refeição", "Consumo", "Desconto", "Adicional", "Líquido"],
-      rows.map((r) => [r.f.nome, r.horas.toFixed(2), r.diasTrabalhados, r.bruto.toFixed(2), r.transp.toFixed(2), r.ref.toFixed(2), r.consumo.toFixed(2), r.desconto.toFixed(2), r.adicional.toFixed(2), r.liquido.toFixed(2)]),
-    );
+    const linhas: (string | number)[][] = [];
+    for (const r of rows.filter((x) => x.temAlgo)) linhas.push(...linhasCsvFuncionario(r.calc, r.f, periodo));
+    linhas.push(["TOTAL A PAGAR", periodo, "", "", "", totalPagar.toFixed(2)]);
+    baixarCsv(`folha-semanal_${from}_${to}.csv`, CSV_CAB, linhas);
   };
 
   const exportPDF = () => {
+    const comTrabalho = rows.filter((x) => x.temAlgo);
     gerarRelatorioPdf({
-      filename: `folha_${from}_${to}.pdf`,
-      title: "Folha de pagamento",
-      subtitle: `${formatDateBR(from)} a ${formatDateBR(to)}`,
-      sections: [{
-        columns: ["Funcionário", "Horas", "Dias", "Bruto", "Transp.", "Refeição", "Consumo", "Desc.", "Adic.", "Líquido"],
-        rows: rows.map((r) => [
-          r.f.nome, r.horas.toFixed(2), String(r.diasTrabalhados), `R$${r.bruto.toFixed(2)}`,
-          `R$${r.transp.toFixed(2)}`, `R$${r.ref.toFixed(2)}`, `R$${r.consumo.toFixed(2)}`,
-          `R$${r.desconto.toFixed(2)}`, `R$${r.adicional.toFixed(2)}`, `R$${r.liquido.toFixed(2)}`,
-        ]),
-      }],
+      filename: `folha-semanal_${from}_${to}.pdf`,
+      title: "Folha semanal",
+      subtitle: `${periodo} (seg a dom)`,
+      sections: [
+        {
+          heading: "Resumo",
+          columns: ["Funcionário", "Dias", "Horas", "Bruto", "Transp.+Ref.", "Adic.", "Consumo", "Desc.", "A receber"],
+          rows: comTrabalho.map(({ f, calc }) => [
+            f.nome, String(calc.diasTrabalhados), calc.horas.toFixed(2), BRL(calc.bruto), BRL(calc.transp + calc.ref),
+            BRL(calc.adicional), BRL(calc.consumo), BRL(calc.desconto), BRL(calc.liquido),
+          ]),
+          totalRow: ["TOTAL A PAGAR", "", "", "", "", "", "", "", BRL(totalPagar)],
+        },
+        ...comTrabalho.flatMap(({ f, calc }) => secoesPdfFuncionario(calc, f, f.nome)),
+      ],
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[480px] max-h-[85vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Folha (por período)</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>📋 Folha semanal</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <p className="text-[11px] text-muted-foreground">
-            Escolha qualquer intervalo — um dia, uma semana, um mês ou um ano — para gerar a folha.
+            Semana de segunda a domingo, paga na segunda-feira seguinte. Os dias trabalhados vêm do Ponto e o
+            valor a receber já sai calculado. Lance aqui o adicional ou desconto só desta semana.
           </p>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs text-muted-foreground">De</label>
-              <div className="mt-1"><DatePickerBR value={from} onChange={setFrom} /></div>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Até</label>
-              <div className="mt-1"><DatePickerBR value={to} onChange={setTo} /></div>
-            </div>
+          <SemanaPicker inicio={semana} onChange={setSemana} />
+
+          <div className="bg-card border border-primary/40 rounded-lg p-3 flex justify-between items-center">
+            <span className="text-sm font-semibold">Total a pagar na semana</span>
+            <span className="mono text-primary text-lg font-semibold">{BRL(totalPagar)}</span>
           </div>
+
           <div className="space-y-2">
-            {rows.map((r) => (
-              <div key={r.f.id} className="bg-card border border-border rounded-lg p-3">
-                <div className="flex justify-between text-sm font-medium">
-                  <span>{r.f.nome}</span>
-                  <span className="mono text-primary">{BRL(r.liquido)}</span>
+            {rows.map(({ f, calc, temAlgo }) => {
+              const a = ajuste(f.username);
+              return (
+                <div key={f.id} className={`bg-card border border-border rounded-lg p-3 space-y-2 ${temAlgo ? "" : "opacity-60"}`}>
+                  <div className="flex justify-between text-sm font-medium">
+                    <span>{f.nome}</span>
+                    <span className="mono text-primary">{BRL(calc.liquido)}</span>
+                  </div>
+                  {!temAlgo ? (
+                    <div className="text-[11px] text-muted-foreground">Sem ponto nem consumo nesta semana.</div>
+                  ) : (
+                    <>
+                      <div className="text-[11px] text-muted-foreground mono space-y-0.5">
+                        <div>{calc.diasTrabalhados} dia(s) · {calc.horas.toFixed(2)}h</div>
+                        {linhasValor(calc, f).map(([k, v]) => (
+                          <div key={k} className="flex justify-between"><span>{k}</span><span>{v}</span></div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-muted-foreground uppercase tracking-wide">Adicional da semana</label>
+                          <BufferedNumberInput value={a?.adicional ?? 0} placeholder="0,00" className="mt-0.5 w-full"
+                            onChange={(n) => setAjuste(f.username, { adicional: n })} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-muted-foreground uppercase tracking-wide">Desconto da semana</label>
+                          <BufferedNumberInput value={a?.desconto ?? 0} placeholder="0,00" className="mt-0.5 w-full"
+                            onChange={(n) => setAjuste(f.username, { desconto: n })} />
+                        </div>
+                      </div>
+                      <Input value={a?.observacao ?? ""} placeholder="Observação (ex.: vale, hora extra)" className="h-9 text-xs"
+                        onChange={(e) => setAjuste(f.username, { observacao: e.target.value })} />
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-primary">Ver dias trabalhados e consumo detalhado</summary>
+                        <div className="mt-2"><DetalheFolha calc={calc} /></div>
+                      </details>
+                    </>
+                  )}
                 </div>
-                <div className="text-xs text-muted-foreground mono mt-1 grid grid-cols-2 gap-x-2">
-                  <span>Horas: {r.horas.toFixed(2)}</span>
-                  <span>Bruto: {BRL(r.bruto)}</span>
-                  <span>Transp: +{BRL(r.transp)}</span>
-                  <span>Ref: +{BRL(r.ref)}</span>
-                  <span>Consumo: -{BRL(r.consumo)}</span>
-                  <span>Desc/Adic: -{BRL(r.desconto)}/+{BRL(r.adicional)}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {rows.length === 0 && <div className="text-sm text-muted-foreground">Nenhum funcionário.</div>}
           </div>
           <div className="grid grid-cols-2 gap-2">
@@ -529,7 +637,7 @@ function RelatorioExcelDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       .map((f) => {
         const meus = pontos.filter((p) => p.employeeUsername === f.username);
         if (meus.length === 0) return null;
-        const calc = calcularFolha(state, f, meus, products);
+        const calc = calcularFolha(state, f, meus, from, to);
         return { f, tipo: tipoPagamento(f), ...calc };
       })
       .filter((r): r is NonNullable<typeof r> => r != null)
