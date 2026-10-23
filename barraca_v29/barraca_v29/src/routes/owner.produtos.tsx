@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, valoresConsumoPonto, type Ponto } from "@/lib/store";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -167,6 +168,7 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
   });
   const [to, setTo] = useFiltro("consumo.to", todayISO());
   const [funcSelecionado, setFuncSelecionado] = useFiltro("consumo.func", ""); // "" = todos os funcionários
+  const [transferindo, setTransferindo] = useState<{ ponto: Ponto; productId: string } | null>(null);
 
   const nomeFunc = (username: string) => state.funcionarios.find((f) => f.username === username)?.nome ?? username;
   const nomeItem = (productId: string) => products.find((p) => p.id === productId)?.name ?? productId;
@@ -238,7 +240,8 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
         </div>
       </div>
       <p className="text-[11px] text-muted-foreground -mt-1 mb-1">
-        Corrija aqui a quantidade de qualquer item consumido por um funcionário. Deixe em 0 para remover o item.
+        Corrija aqui a quantidade de qualquer item consumido por um funcionário (0 remove o item). Se o consumo
+        foi lançado no nome errado, use ↔ para transferir para quem realmente consumiu.
       </p>
       <div className="grid grid-cols-2 gap-2">
         <Button variant="secondary" onClick={baixarPdf}>📄 PDF</Button>
@@ -268,6 +271,11 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
                       className="w-16 text-center"
                       onChange={(n) => dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: p.id, productId: c.productId, qty: n })}
                     />
+                    <button type="button" title="Transferir para outro funcionário" aria-label={`Transferir ${nomeItem(c.productId)}`}
+                      onClick={() => setTransferindo({ ponto: p, productId: c.productId })}
+                      className="h-9 px-2 rounded-md border border-border text-xs text-primary hover:bg-primary/10">
+                      ↔
+                    </button>
                   </div>
                 ))}
               </div>
@@ -279,6 +287,83 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
           </div>
         </>
       )}
+      <TransferirConsumoDialog alvo={transferindo} onClose={() => setTransferindo(null)} nomeItem={nomeItem} nomeFunc={nomeFunc} />
     </div>
+  );
+}
+
+// Transfere (toda ou parte da) quantidade de um item de consumo de um funcionário para outro, na mesma
+// data. Serve para corrigir consumo lançado no nome errado (ex.: tudo no nome de quem estava logada).
+// O total consumido no turno não muda — só muda de quem é a conta.
+function TransferirConsumoDialog({ alvo, onClose, nomeItem, nomeFunc }: {
+  alvo: { ponto: Ponto; productId: string } | null;
+  onClose: () => void;
+  nomeItem: (id: string) => string;
+  nomeFunc: (username: string) => string;
+}) {
+  const { state, dispatch } = useStore();
+  const [para, setPara] = useState("");
+  const [qtd, setQtd] = useState(0);
+  // Sempre lê o registro atualizado (a quantidade pode ter mudado)
+  const ponto = alvo ? state.pontos.find((p) => p.id === alvo.ponto.id) ?? null : null;
+  const item = ponto?.consumo.find((c) => c.productId === alvo?.productId);
+  const max = item?.qty ?? 0;
+  const destinos = state.funcionarios.filter((f) => f.username !== ponto?.employeeUsername);
+
+  const abrir = (aberto: boolean) => { if (!aberto) { onClose(); setPara(""); setQtd(0); } };
+  const quantidade = qtd > 0 ? qtd : max;
+
+  const transferir = () => {
+    if (!ponto || !item || !alvo) return;
+    if (!para) { alert("Escolha para quem transferir."); return; }
+    if (quantidade > max) { alert(`Só há ${max} un. neste registro.`); return; }
+    // 1) tira de quem estava
+    dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: ponto.id, productId: item.productId, qty: max - quantidade });
+    // 2) coloca em quem consumiu: no registro dele do mesmo dia (se houver) ou num registro só de consumo
+    const doDestino = state.pontos.find((p) => p.employeeUsername === para && p.date === ponto.date);
+    if (doDestino) {
+      const atual = doDestino.consumo.find((c) => c.productId === item.productId)?.qty ?? 0;
+      dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: doDestino.id, productId: item.productId, qty: atual + quantidade });
+    } else {
+      dispatch({
+        type: "ADD_PONTO",
+        p: {
+          id: crypto.randomUUID(), employeeUsername: para, date: ponto.date,
+          entrada: "00:00", saida: "00:00", transporte: 0, refeicao: 0, colegas: [],
+          consumo: [{ productId: item.productId, qty: quantidade }],
+        },
+      });
+    }
+    alert(`Transferido: ${quantidade}× ${nomeItem(item.productId)} de ${nomeFunc(ponto.employeeUsername)} para ${nomeFunc(para)} (${formatDateBR(ponto.date)}).`);
+    abrir(false);
+  };
+
+  return (
+    <Dialog open={!!alvo && !!item} onOpenChange={abrir}>
+      <DialogContent className="max-w-[420px]">
+        <DialogHeader><DialogTitle>↔ Transferir consumo</DialogTitle></DialogHeader>
+        {ponto && item && (
+          <div className="space-y-3">
+            <p className="text-sm">
+              <span className="font-medium">{item.qty}× {nomeItem(item.productId)}</span> lançado para{" "}
+              <span className="font-medium">{nomeFunc(ponto.employeeUsername)}</span> em {formatDateBR(ponto.date)}.
+            </p>
+            <div>
+              <label className="text-xs text-muted-foreground">Quem consumiu de verdade?</label>
+              <select value={para} onChange={(e) => setPara(e.target.value)}
+                className="mt-1 w-full h-10 rounded-md bg-input border border-border px-3 text-sm">
+                <option value="">Escolha o funcionário</option>
+                {destinos.map((f) => <option key={f.username} value={f.username}>{f.nome}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Quantidade a transferir (de {max})</label>
+              <BufferedNumberInput value={qtd} decimal={false} placeholder={String(max)} className="mt-1 w-full h-10" onChange={setQtd} />
+            </div>
+            <Button className="w-full" onClick={transferir}>Transferir {quantidade} un.</Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
