@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useStore, getAllProducts, descontoPercentual, valorConsumoPonto, limiteCategoriaFuncionario, type ShiftItem } from "@/lib/store";
@@ -9,27 +9,34 @@ function limiteDisponivel(it: ShiftItem | undefined, tipo: "consumo" | "descarte
   if (!it) return 999;
   const base = (it.entrada || 0) + (it.chegada || 0);
   if (tipo === "consumo") {
-    // Consumo do funcionário: desconta do disponível menos o que já foi descartado e consumo barraca
-    return Math.max(0, base - (it.descarte || 0) - (it.consumoEst || 0));
+    // Consumo do funcionário: disponível menos descarte, consumo barraca e o consumo já registrado no turno
+    return Math.max(0, base - (it.descarte || 0) - (it.consumoEst || 0) - (it.consumo || 0));
   }
   // Descarte: desconta do disponível menos consumo do funcionário e consumo barraca
   return Math.max(0, base - (it.consumo || 0) - (it.consumoEst || 0));
 }
 
+// Lançamento de consumo de UMA pessoa. Abre sempre vazio (antes trazia o que foi lançado para a pessoa
+// anterior, e quem não apagava acabava lançando o consumo de um no nome de outro). O que for salvo é
+// SOMADO ao que já foi lançado para essa pessoa (aparece na lista abaixo do botão dela).
 export function ConsumoModal({
-  open, onOpenChange, values, items, hasActiveTurno = true, username, onSave,
+  open, onOpenChange, items, hasActiveTurno = true, username, nomePessoa, reservado, onSave,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  values: Record<string, number>;
   items?: Record<string, ShiftItem>;
   hasActiveTurno?: boolean; // false = não há turno aberto agora; bloqueia todo o consumo
   username?: string; // quando definido, usa o desconto configurado para esse funcionário/produto
+  nomePessoa?: string; // aparece no título: deixa claro para quem está sendo lançado
+  reservado?: Record<string, number>; // já lançado (ainda não registrado) para todas as pessoas: conta no limite
   onSave: (v: Record<string, number>) => void;
 }) {
   const { state } = useStore();
   const products = getAllProducts(state).filter((p) => p.saleable);
-  const [local, setLocal] = useState<Record<string, number>>(values);
+  const [local, setLocal] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (open) setLocal({});
+  }, [open]);
 
   const total = username
     ? valorConsumoPonto(state, username, products.map((p) => ({ productId: p.id, qty: local[p.id] || 0 })))
@@ -49,7 +56,7 @@ export function ConsumoModal({
 
   const handleChange = (pid: string, rawVal: string) => {
     const val = parseInt2(rawVal);
-    const limite = items ? limiteDisponivel(items[pid], "consumo") : 999;
+    const limite = items ? Math.max(0, limiteDisponivel(items[pid], "consumo") - (reservado?.[pid] ?? 0)) : 999;
     if (semEstoque(pid, limite) && val > 0) {
       alert("Sem estoque disponível para este produto.");
       return;
@@ -64,7 +71,7 @@ export function ConsumoModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[480px] max-h-[85vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>🍽 Consumo do funcionário</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>🍽 Consumo de {nomePessoa ?? "funcionário"}</DialogTitle></DialogHeader>
         <p className="text-xs text-muted-foreground">
           {username ? "Desconto configurado por produto para este funcionário · Água é grátis" : "Desconto = 50% do preço · Água é grátis"}
         </p>
@@ -73,7 +80,7 @@ export function ConsumoModal({
         )}
         <div className="space-y-1.5 mt-2">
           {products.map((p) => {
-            const limite = items ? limiteDisponivel(items[p.id], "consumo") : 999;
+            const limite = items ? Math.max(0, limiteDisponivel(items[p.id], "consumo") - (reservado?.[p.id] ?? 0)) : 999;
             const indisponivel = semEstoque(p.id, limite);
             const pct = username ? descontoPercentual(state, username, p) : 50;
             const limiteDesc = username ? limiteCategoriaFuncionario(state, username, p.category) : undefined;
@@ -106,11 +113,20 @@ export function ConsumoModal({
         </div>
         <DialogFooter className="flex-row justify-between items-center mt-2">
           <div className="mono text-sm">Total desconto: <span className="text-primary font-semibold">{BRL(total)}</span></div>
-          <Button onClick={() => { onSave(local); onOpenChange(false); }}>Salvar</Button>
+          <Button onClick={() => { onSave(Object.fromEntries(Object.entries(local).filter(([, q]) => q > 0))); onOpenChange(false); }}>
+            Adicionar
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+// Soma dois lançamentos de consumo (produto -> quantidade)
+export function somarConsumo(a: Record<string, number>, b: Record<string, number>): Record<string, number> {
+  const out = { ...a };
+  for (const [pid, q] of Object.entries(b)) if (q > 0) out[pid] = (out[pid] ?? 0) + q;
+  return out;
 }
 
 export function DescarteModal({
