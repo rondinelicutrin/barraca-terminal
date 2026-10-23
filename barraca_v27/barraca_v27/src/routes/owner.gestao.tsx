@@ -97,6 +97,7 @@ function GestaoPage() {
       linhas: [
         ["Caixa total bruto", BRL(liq.bruto)],
         ["Taxas das maquininhas", BRL(liq.taxasCartao)],
+        ["Inclusões de dinheiro", BRL(liq.inclusoes)],
         ["Retiradas de dinheiro", BRL(liq.retiradas)],
         ["Pagamentos pelas maquininhas", BRL(liq.pagoMaq1 + liq.pagoMaq2)],
         ["Caixa total líquido", BRL(liq.liquido)],
@@ -258,7 +259,7 @@ function GestaoPage() {
             <div className="grid grid-cols-2 gap-2">
               <Kpi label="Caixa total bruto" value={BRL(liq.bruto)} destaque />
               <Kpi label="Caixa total líquido" value={BRL(liq.liquido)} destaque cor="text-success"
-                dica={`− taxas ${BRL(liq.taxasCartao)} − retiradas ${BRL(liq.retiradas)} − pagtos maq. ${BRL(liq.pagoMaq1 + liq.pagoMaq2)}`} />
+                dica={`${liq.inclusoes > 0 ? `+ inclusões ${BRL(liq.inclusoes)} ` : ""}− taxas ${BRL(liq.taxasCartao)} − retiradas ${BRL(liq.retiradas)} − pagtos maq. ${BRL(liq.pagoMaq1 + liq.pagoMaq2)}`} />
               <Kpi label="Turnos fechados" value={String(tot.turnos)} dica={`média ${BRL(tot.media)}/turno`} />
               <Kpi label="Perdido em faltas" value={BRL(tot.perdas)} cor="text-destructive" dica={`a mais: ${BRL(tot.sobras)}`} />
             </div>

@@ -1,7 +1,7 @@
 // Cálculos do dashboard de gestão (menu Gestão): tudo é derivado do histórico de turnos fechados,
 // dos pontos (consumo) e das retiradas/pagamentos — nada é gravado, só calculado a partir do que já existe.
 import {
-  getAllProducts, esperadoTurno, arrecadadoTurno, resumoPagamentos, valorConsumoPonto, nomeMaquina,
+  getAllProducts, esperadoTurno, arrecadadoTurno, resumoPagamentos, valorConsumoPonto, nomeMaquina, movimentosDinheiro,
   type State, type Turno, type ShiftKey,
 } from "@/lib/store";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
@@ -102,25 +102,26 @@ export function totaisGerais(linhas: LinhaTurno[]) {
 }
 
 // Bruto x líquido do período, usando a mesma regra do menu Pagamentos:
-// líquido = dinheiro (− retiradas) + moedas + pix + voucher + cada maquininha (− taxa − pagamentos).
+// líquido = dinheiro (+ inclusões − retiradas) + moedas + pix + voucher + cada maquininha (− taxa − pagamentos).
+// Inclusões de dinheiro não são venda: entram no líquido, mas não no bruto.
 export function liquidoDoPeriodo(state: State, from: string, to: string) {
   const r = resumoPagamentos(state.historico, from, to);
   const doPeriodo = state.retiradas.filter((x) => x.date >= from && x.date <= to);
   const soma = (o: string) => doPeriodo.filter((x) => (x.origem ?? "dinheiro") === o).reduce((s, x) => s + x.valor, 0);
-  const retiradas = soma("dinheiro");
+  const { retirado: retiradas, incluido: inclusoes } = movimentosDinheiro(doPeriodo);
   const pagoMaq1 = soma("maq1");
   const pagoMaq2 = soma("maq2");
   const taxas = state.taxasMaquininha;
   const taxaMaq1 = r.maq1Bruto * (taxas.maq1 / 100);
   const taxaMaq2 = r.maq2Bruto * (taxas.maq2 / 100);
-  const dinheiroLiq = Math.max(0, r.dinheiro - retiradas);
+  const dinheiroLiq = Math.max(0, r.dinheiro + inclusoes - retiradas);
   const liquido =
     dinheiroLiq + r.moedas + r.pix + r.voucher +
     (r.maq1Bruto - taxaMaq1 - pagoMaq1) + (r.maq2Bruto - taxaMaq2 - pagoMaq2);
   const bruto = r.dinheiro + r.moedas + r.pix + r.voucher + r.maq1Bruto + r.maq2Bruto;
   const cartaoBruto = r.maq1Bruto + r.maq2Bruto;
   return {
-    resumo: r, bruto, liquido, retiradas, pagoMaq1, pagoMaq2,
+    resumo: r, bruto, liquido, retiradas, inclusoes, pagoMaq1, pagoMaq2,
     taxasCartao: taxaMaq1 + taxaMaq2, cartaoBruto,
     formas: [
       { nome: "Dinheiro", valor: r.dinheiro },

@@ -120,6 +120,22 @@ export interface Retirada {
   criadoEm: number;
   // De onde saiu o valor: caixa em dinheiro (padrão) ou saldo de uma das maquininhas de cartão
   origem?: "dinheiro" | "maq1" | "maq2";
+  // "inclusao" = dinheiro colocado no caixa (soma); ausente/"retirada" = dinheiro tirado do caixa (subtrai).
+  // Inclusão só existe para dinheiro.
+  tipo?: "retirada" | "inclusao";
+}
+
+export const ehInclusao = (r: Pick<Retirada, "tipo">) => r.tipo === "inclusao";
+
+// Movimentos de dinheiro do caixa (só origem "dinheiro"): total retirado e total incluído
+export function movimentosDinheiro(lista: Retirada[]): { retirado: number; incluido: number } {
+  let retirado = 0, incluido = 0;
+  for (const r of lista) {
+    if ((r.origem ?? "dinheiro") !== "dinheiro") continue;
+    if (ehInclusao(r)) incluido += r.valor;
+    else retirado += r.valor;
+  }
+  return { retirado, incluido };
 }
 
 export interface TaxasMaquininha {
@@ -1115,6 +1131,7 @@ function retiradaFromRow(row: any): Retirada {
     motivo: row.motivo,
     criadoEm: new Date(row.created_at).getTime(),
     origem: row.origem === "maq1" || row.origem === "maq2" ? row.origem : "dinheiro",
+    tipo: row.tipo === "inclusao" ? "inclusao" : "retirada",
   };
 }
 
@@ -1122,7 +1139,9 @@ function retiradaToRow(r: Retirada) {
   const base = { id: r.id, date: r.date, valor: r.valor, motivo: r.motivo, created_at: new Date(r.criadoEm).toISOString() };
   // A coluna "origem" só é enviada quando não é dinheiro — assim as retiradas de dinheiro continuam
   // funcionando mesmo antes de rodar o SQL que cria a coluna.
-  return r.origem && r.origem !== "dinheiro" ? { ...base, origem: r.origem } : base;
+  const comOrigem = r.origem && r.origem !== "dinheiro" ? { ...base, origem: r.origem } : base;
+  // Idem para "tipo": só vai quando é inclusão (precisa do adicionar_inclusao_dinheiro.sql)
+  return ehInclusao(r) ? { ...comOrigem, tipo: "inclusao" } : comOrigem;
 }
 
 // Retirada é um lançamento único (não muda a cada tecla), então vai direto, sem atraso.
@@ -1136,6 +1155,9 @@ async function sincronizarRetirada(a: Action) {
       if (error) throw error;
     }
   } catch (e) {
+    if (a.type === "ADD_RETIRADA" && ehInclusao(a.r) && ehColunaFaltando(e)) {
+      alert("Para salvar inclusões de dinheiro no banco, rode o arquivo adicionar_inclusao_dinheiro.sql no SQL Editor do Supabase (até lá a inclusão vale só neste aparelho).");
+    }
     // eslint-disable-next-line no-console
     console.error("Não foi possível salvar a retirada no Supabase:", e);
   }
