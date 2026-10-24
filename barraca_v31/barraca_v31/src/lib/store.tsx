@@ -240,6 +240,7 @@ type Action =
     }
   | { type: "ADD_PONTO"; p: Ponto }
   | { type: "REMOVE_PONTO"; id: string }
+  | { type: "UPDATE_PONTO"; id: string; patch: Partial<Pick<Ponto, "date" | "entrada" | "saida" | "transporte" | "refeicao">> }
   | { type: "UPDATE_PONTO_CONSUMO"; pontoId: string; productId: string; qty: number }
   | { type: "SET_PRICE"; productId: string; price: number }
   | { type: "SET_ESTOQUE_QTD"; productId: string; qtd: number }
@@ -517,6 +518,16 @@ async function sincronizarPonto(a: Action) {
         const { error: errConsumo } = await supabase.from("ponto_consumo").insert(rows);
         if (errConsumo) throw errConsumo;
       }
+    } else if (a.type === "UPDATE_PONTO") {
+      // Correção feita pelo dono (folha semanal): data, horários, transporte e refeição
+      const row: Record<string, unknown> = {};
+      if (a.patch.date !== undefined) row.date = a.patch.date;
+      if (a.patch.entrada !== undefined) row.entrada = a.patch.entrada;
+      if (a.patch.saida !== undefined) row.saida = a.patch.saida;
+      if (a.patch.transporte !== undefined) row.transporte = a.patch.transporte;
+      if (a.patch.refeicao !== undefined) row.refeicao = a.patch.refeicao;
+      const { error } = await supabase.from("pontos").update(row).eq("id", a.id);
+      if (error) throw error;
     } else if (a.type === "REMOVE_PONTO") {
       // ponto_consumo some junto (on delete cascade, configurado no banco)
       const { error } = await supabase.from("pontos").delete().eq("id", a.id);
@@ -794,6 +805,8 @@ function reducer(s: State, a: Action): State {
       n = { ...s, pontos: [a.p, ...s.pontos] }; break;
     case "REMOVE_PONTO":
       n = { ...s, pontos: s.pontos.filter((p) => p.id !== a.id) }; break;
+    case "UPDATE_PONTO":
+      n = { ...s, pontos: s.pontos.map((p) => (p.id === a.id ? { ...p, ...a.patch } : p)) }; break;
     case "UPDATE_PONTO_CONSUMO": {
       n = {
         ...s,
@@ -1840,7 +1853,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       void excluirTurnoSupabase(a.id);
     } else if (a.type === "ADD_FUNC" || a.type === "UPDATE_FUNC" || a.type === "REMOVE_FUNC") {
       void sincronizarFuncionario(a);
-    } else if (a.type === "ADD_PONTO" || a.type === "REMOVE_PONTO" || a.type === "UPDATE_PONTO_CONSUMO") {
+    } else if (a.type === "ADD_PONTO" || a.type === "REMOVE_PONTO" || a.type === "UPDATE_PONTO" || a.type === "UPDATE_PONTO_CONSUMO") {
       void sincronizarPonto(a);
     } else if (a.type === "ADD_RETIRADA" || a.type === "REMOVE_RETIRADA") {
       void sincronizarRetirada(a);

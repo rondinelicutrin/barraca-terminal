@@ -227,7 +227,7 @@ function GestaoPage() {
           </div>
           <div className="flex gap-1.5 flex-wrap">
             {([["hoje", "Hoje"], ["7", "7 dias"], ["mes", "Este mês"], ["ano", "Este ano"], ["tudo", "Tudo"]] as const).map(([k, l]) => (
-              <button key={k} onClick={() => preset(k)} className="px-2.5 h-7 rounded-full text-xs bg-background border border-border text-muted-foreground hover:text-primary">{l}</button>
+              <button key={k} onClick={() => preset(k)} className="px-3 h-9 rounded-full text-xs bg-background border border-border text-muted-foreground hover:text-primary">{l}</button>
             ))}
           </div>
         </div>

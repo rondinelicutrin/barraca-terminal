@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, valorConsumoPonto, ehSoConsumo, normalizarUsuario, type Funcionario } from "@/lib/store";
-import { calcularFolha, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, type Folha } from "@/lib/folha";
+import { calcularFolha, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, horasEntre, type Folha, type DiaTrabalhado } from "@/lib/folha";
 import { SemanaPicker } from "@/components/SemanaPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -176,7 +176,24 @@ function Funcionarios() {
 
 // Blocos de detalhe usados no diálogo do funcionário e na folha semanal: dias trabalhados e consumo
 // item a item (o funcionário pode questionar o desconto — aqui está de onde vem cada valor).
-function DetalheFolha({ calc }: { calc: Folha }) {
+function DetalheFolha({ calc, nome }: { calc: Folha; nome: string }) {
+  const { dispatch } = useStore();
+  const [editando, setEditando] = useState<DiaTrabalhado | null>(null);
+
+  // Excluir um ponto lançado errado. Se o registro tem consumo junto, o consumo é mantido (vira um
+  // registro só de consumo, que não conta como dia trabalhado) — para não apagar consumo verdadeiro.
+  const excluir = (d: DiaTrabalhado) => {
+    const rotulo = `${nome} em ${formatDateBR(d.date)} (${d.entrada}–${d.saida})`;
+    if (d.temConsumo) {
+      if (!confirm(`Excluir o registro de ponto de ${rotulo}?\n\nEsse registro tem consumo lançado junto: o consumo continua na conta de ${nome} ` +
+        `(se também estiver errado, corrija em Produtos → Consumo). O dia deixa de contar como trabalhado.`)) return;
+      dispatch({ type: "UPDATE_PONTO", id: d.pontoId, patch: { entrada: "00:00", saida: "00:00", transporte: 0, refeicao: 0 } });
+    } else {
+      if (!confirm(`Excluir o registro de ponto de ${rotulo}?\n\nEsta ação não pode ser desfeita.`)) return;
+      dispatch({ type: "REMOVE_PONTO", id: d.pontoId });
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div>
@@ -184,15 +201,21 @@ function DetalheFolha({ calc }: { calc: Folha }) {
         {calc.dias.length === 0 ? (
           <div className="text-[11px] text-muted-foreground">Nenhum ponto no período.</div>
         ) : (
-          <div className="text-[11px] mono space-y-0.5">
-            {calc.dias.map((d, i) => (
-              <div key={i} className="flex justify-between">
-                <span>{formatDateBR(d.date)} · {d.entrada}–{d.saida}</span><span>{d.horas.toFixed(2)}h</span>
+          <div className="text-[11px] mono space-y-1">
+            {calc.dias.map((d) => (
+              <div key={d.pontoId} className="flex items-center gap-2">
+                <span className="flex-1">{formatDateBR(d.date)} · {d.entrada}–{d.saida}</span>
+                <span>{d.horas.toFixed(2)}h</span>
+                <button type="button" aria-label={`Alterar ponto de ${formatDateBR(d.date)}`} onClick={() => setEditando(d)}
+                  className="h-8 w-8 rounded-md border border-border text-sm hover:border-primary">✏️</button>
+                <button type="button" aria-label={`Excluir ponto de ${formatDateBR(d.date)}`} onClick={() => excluir(d)}
+                  className="h-8 w-8 rounded-md border border-border text-sm hover:border-destructive">🗑</button>
               </div>
             ))}
           </div>
         )}
       </div>
+      <EditarPontoDialog dia={editando} nome={nome} onClose={() => setEditando(null)} />
       <div>
         <div className="text-xs font-semibold mb-1">Consumo por produto</div>
         {calc.consumoPorProduto.length === 0 ? (
@@ -286,6 +309,68 @@ function linhasCsvFuncionario(calc: Folha, f: Funcionario, periodo: string): (st
   return out;
 }
 const CSV_CAB = ["Funcionário", "Período", "Tipo", "Descrição", "Qtd/Horas", "Valor (R$)"];
+
+// Alterar um registro de ponto (data, entrada, saída, transporte e refeição) lançado errado
+function EditarPontoDialog({ dia, nome, onClose }: { dia: DiaTrabalhado | null; nome: string; onClose: () => void }) {
+  const { state, dispatch } = useStore();
+  const [form, setForm] = useState<DiaTrabalhado | null>(null);
+  useEffect(() => { setForm(dia); }, [dia]);
+  if (!dia || !form) return null;
+
+  const salvar = () => {
+    if (!form.date || !form.entrada || !form.saida) { alert("Preencha data, entrada e saída."); return; }
+    if (form.entrada === form.saida) { alert("Entrada e saída iguais: o registro deixaria de contar como dia trabalhado. Para isso, use 🗑 (excluir)."); return; }
+    const ponto = state.pontos.find((p) => p.id === dia.pontoId);
+    const outroNoDia = state.pontos.some((p) => p.id !== dia.pontoId && p.employeeUsername === ponto?.employeeUsername &&
+      p.date === form.date && p.entrada.slice(0, 5) !== p.saida.slice(0, 5));
+    if (outroNoDia && !confirm(`${nome} já tem outro ponto em ${formatDateBR(form.date)}. Salvar assim mesmo?`)) return;
+    dispatch({
+      type: "UPDATE_PONTO", id: dia.pontoId,
+      patch: { date: form.date, entrada: form.entrada, saida: form.saida, transporte: form.transporte, refeicao: form.refeicao },
+    });
+    onClose();
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-[420px]">
+        <DialogHeader><DialogTitle>✏️ Alterar ponto — {nome}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground">Data</label>
+            <div className="mt-1"><DatePickerBR value={form.date} onChange={(v) => setForm({ ...form, date: v })} /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground">Entrada (24h)</label>
+              <input type="time" value={form.entrada} onChange={(e) => setForm({ ...form, entrada: e.target.value })}
+                className="mt-1 w-full h-10 rounded-md bg-input px-3 mono" aria-label="Entrada" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Saída (24h)</label>
+              <input type="time" value={form.saida} onChange={(e) => setForm({ ...form, saida: e.target.value })}
+                className="mt-1 w-full h-10 rounded-md bg-input px-3 mono" aria-label="Saída" />
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground mono">{horasEntre(form.entrada, form.saida).toFixed(2)}h</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground">Transporte (R$)</label>
+              <BufferedNumberInput value={form.transporte} placeholder="0,00" className="mt-1 w-full h-10"
+                onChange={(n) => setForm({ ...form, transporte: n })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Refeição (R$)</label>
+              <BufferedNumberInput value={form.refeicao} placeholder="0,00" className="mt-1 w-full h-10"
+                onChange={(n) => setForm({ ...form, refeicao: n })} />
+            </div>
+          </div>
+          <Button className="w-full" onClick={salvar}>Salvar alteração</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // Diálogo de edição de um funcionário: valores pessoais de transporte/refeição, taxa por hora,
 // diária, desconto, adicional — e o valor a receber (com dias e consumo detalhados) no período.
@@ -414,7 +499,7 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
               <span>Valor a receber</span>
               <span className="mono text-primary text-lg">{BRL(calc.liquido)}</span>
             </div>
-            <DetalheFolha calc={calc} />
+            <DetalheFolha calc={calc} nome={f.nome} />
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={baixarPdfArquivo}>📄 PDF</Button>
               <Button variant="secondary" onClick={baixarCsvArquivo}>📊 CSV</Button>
@@ -533,8 +618,8 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                       <Input value={a?.observacao ?? ""} placeholder="Observação (ex.: vale, hora extra)" className="h-9 text-xs"
                         onChange={(e) => setAjuste(f.username, { observacao: e.target.value })} />
                       <details className="text-xs">
-                        <summary className="cursor-pointer text-primary">Ver dias trabalhados e consumo detalhado</summary>
-                        <div className="mt-2"><DetalheFolha calc={calc} /></div>
+                        <summary className="cursor-pointer text-primary py-1">Ver / alterar dias trabalhados e consumo detalhado</summary>
+                        <div className="mt-2"><DetalheFolha calc={calc} nome={f.nome} /></div>
                       </details>
                     </>
                   )}

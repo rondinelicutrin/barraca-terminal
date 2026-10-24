@@ -77,7 +77,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { title: "Barraca Terminal — Controle de Vendas" },
       { name: "description", content: "Sistema de controle de vendas para barraca de pastel: turnos, caixa, produtos e equipe." },
       { name: "author", content: "Barraca Terminal" },

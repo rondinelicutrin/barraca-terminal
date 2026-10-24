@@ -90,3 +90,16 @@
   .print-only { display: block !important; }
   body, html { background: #fff !important; }
 }
+
+/* Celular e tablet (tela de toque) */
+@media (pointer: coarse) {
+  /* 16px ou mais: o iPhone não dá zoom sozinho ao tocar num campo */
+  input, select, textarea { font-size: 16px !important; }
+  /* Caixinhas de marcar e botões do topo com tamanho de dedo */
+  input[type="checkbox"], button[role="checkbox"] { width: 22px; height: 22px; }
+  header a, header button { min-height: 36px; display: inline-flex; align-items: center; padding: 0 4px; }
+  header .flex-wrap { row-gap: 0; }
+}
+
+/* iPhone sem botão: a barra de navegação de baixo não fica atrás da "barrinha" da tela */
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }

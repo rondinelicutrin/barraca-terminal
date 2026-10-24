@@ -83,13 +83,13 @@ function Historico() {
               </div>
               <div className="flex gap-2 items-center">
                 <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary">Em andamento</span>
-                <Link to="/owner/turno/$id" params={{ id: state.turnoAtivo.id }} className="text-muted-foreground hover:text-primary text-sm">✏️</Link>
+                <Link to="/owner/turno/$id" params={{ id: state.turnoAtivo.id }} className="inline-flex shrink-0 items-center justify-center h-9 w-9 text-muted-foreground hover:text-primary text-sm">✏️</Link>
                 <button
                   type="button"
                   title="Excluir turno"
                   aria-label="Excluir turno em andamento"
                   onClick={() => excluirTurno(state.turnoAtivo!.id, `${formatDateBR(state.turnoAtivo!.date)} · ${shiftLabel(state.turnoAtivo!.shift)}`, true)}
-                  className="text-muted-foreground hover:text-destructive text-sm">🗑</button>
+                  className="inline-flex shrink-0 items-center justify-center h-9 w-9 text-muted-foreground hover:text-destructive text-sm">🗑</button>
               </div>
             </div>
             <div className="text-xs text-muted-foreground mono mt-1">{state.turnoAtivo.employee}</div>
@@ -111,13 +111,13 @@ function Historico() {
                     {status === "ok" ? "OK" : "Falta"}
                   </span>
                   {t.editado && <span className="text-[10px] text-muted-foreground">editado</span>}
-                  <Link to="/owner/turno/$id" params={{ id: t.id }} className="text-muted-foreground hover:text-primary text-sm">✏️</Link>
+                  <Link to="/owner/turno/$id" params={{ id: t.id }} className="inline-flex shrink-0 items-center justify-center h-9 w-9 text-muted-foreground hover:text-primary text-sm">✏️</Link>
                   <button
                     type="button"
                     title="Excluir fechamento"
                     aria-label="Excluir fechamento"
                     onClick={() => excluirTurno(t.id, `${formatDateBR(t.date)} · ${shiftLabel(t.shift)}`, false)}
-                    className="text-muted-foreground hover:text-destructive text-sm">🗑</button>
+                    className="inline-flex shrink-0 items-center justify-center h-9 w-9 text-muted-foreground hover:text-destructive text-sm">🗑</button>
                 </div>
               </div>
               <div className="text-xs text-muted-foreground mono mt-1">
