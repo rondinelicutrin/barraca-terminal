@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useReducer, useRef, type ReactNod
 import { DEFAULT_PRODUCTS, type Product } from "./products";
 import { todayISO } from "./format";
 import { supabase } from "./supabase";
+import { enviar, processar, registrarExecutor, pendentesDoTipo } from "./fila";
 
 export type ShiftKey = "manha" | "tarde" | "noite";
 
@@ -307,7 +308,8 @@ async function sincronizarFuncionario(a: Action) {
         desconto: a.f.desconto ?? null,
         adicional: a.f.adicional ?? null,
       });
-      if (error) throw error;
+      // 23505 = já existe: o envio anterior chegou ao banco antes da internet cair (é um reenvio)
+      if (error && error.code !== "23505") throw error;
     } else if (a.type === "UPDATE_FUNC") {
       const patch: Record<string, unknown> = {};
       if ("nome" in a.patch) patch.nome = a.patch.nome;
@@ -334,8 +336,7 @@ async function sincronizarFuncionario(a: Action) {
     if (a.type === "UPDATE_FUNC" && "ativo" in a.patch && String((e as any)?.message ?? "").includes("ativo")) {
       alert("Para ativar/desativar funcionários o banco precisa da coluna 'ativo'. Rode o arquivo adicionar_ativo.sql no SQL Editor do Supabase (até lá a mudança vale só neste aparelho).");
     }
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar no Supabase (verifique a internet):", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -465,8 +466,7 @@ async function sincronizarTurnoCompleto(t: Turno) {
       if (errItens) throw errItens;
     }
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar o turno no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -477,8 +477,7 @@ async function excluirTurnoSupabase(turnoId: string) {
     const { error } = await supabase.from("turnos").delete().eq("id", turnoId);
     if (error) throw error;
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível excluir o turno no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -502,7 +501,8 @@ function pontoFromRow(row: any, consumo: PontoConsumoItem[]): Ponto {
 async function sincronizarPonto(a: Action) {
   try {
     if (a.type === "ADD_PONTO") {
-      const { error: errPonto } = await supabase.from("pontos").insert({
+      // upsert (e não insert): se a internet cair no meio e o envio for repetido, não duplica nem dá erro
+      const { error: errPonto } = await supabase.from("pontos").upsert({
         id: a.p.id,
         employee_username: a.p.employeeUsername,
         date: a.p.date,
@@ -511,11 +511,11 @@ async function sincronizarPonto(a: Action) {
         transporte: a.p.transporte,
         refeicao: a.p.refeicao,
         colegas: a.p.colegas,
-      });
+      }, { onConflict: "id" });
       if (errPonto) throw errPonto;
       if (a.p.consumo.length > 0) {
         const rows = a.p.consumo.map((c) => ({ ponto_id: a.p.id, product_id: c.productId, qty: c.qty }));
-        const { error: errConsumo } = await supabase.from("ponto_consumo").insert(rows);
+        const { error: errConsumo } = await supabase.from("ponto_consumo").upsert(rows, { onConflict: "ponto_id,product_id" });
         if (errConsumo) throw errConsumo;
       }
     } else if (a.type === "UPDATE_PONTO") {
@@ -546,8 +546,7 @@ async function sincronizarPonto(a: Action) {
       }
     }
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar o ponto no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -1192,8 +1191,7 @@ async function sincronizarRetirada(a: Action) {
     if (a.type === "ADD_RETIRADA" && ehInclusao(a.r) && ehColunaFaltando(e)) {
       alert("Para salvar inclusões de dinheiro no banco, rode o arquivo adicionar_inclusao_dinheiro.sql no SQL Editor do Supabase (até lá a inclusão vale só neste aparelho).");
     }
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar a retirada no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -1294,6 +1292,11 @@ async function carregarRetiradas(
     return false;
   }
   const doBanco = (data ?? []).map(retiradaFromRow);
+  // Retiradas/inclusões lançadas aqui que ainda esperam a internet continuam aparecendo
+  const idsBanco = new Set(doBanco.map((r) => r.id));
+  for (const p of pendentesDoTipo<Action>("retirada")) {
+    if (p.type === "ADD_RETIRADA" && !idsBanco.has(p.r.id)) doBanco.push(p.r);
+  }
   let soLocais: Retirada[] = [];
   let ok = true;
   if (migrar) {
@@ -1437,30 +1440,38 @@ function avisarSqlProdutos() {
 }
 
 // Envia o produto inteiro (nome, categoria, preço...). Usado quando o dono cadastra ou troca o preço.
-async function sincronizarPrecoProduto(s: State, id: string) {
+// Produto inteiro (nome, categoria, preço...): quando o dono cadastra ou troca o preço. A linha é montada
+// na hora do lançamento e vai para a fila (se estiver sem internet, é enviada depois).
+function enviarPrecoProduto(s: State, id: string) {
   const p = acharProduto(s, id);
   if (!p) return;
+  enviar("produto", produtoToRow(s, p), { chave: `produto:${id}` });
+}
+
+async function gravarProdutoRow(row: ReturnType<typeof produtoToRow>) {
   try {
-    const { error } = await supabase.from("produtos").upsert(produtoToRow(s, p), { onConflict: "id" });
+    const { error } = await supabase.from("produtos").upsert(row, { onConflict: "id" });
     if (error) throw error;
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar o produto no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
 // Envia só o estoque (não mexe no preço — um aparelho desatualizado nunca desfaz o preço do dono)
-async function sincronizarEstoqueProduto(s: State, id: string) {
+function enviarEstoqueProduto(s: State, id: string) {
+  enviar("estoque", { id, estoque_qtd: s.estoqueQtd[id] ?? null, estoque_minimo: s.estoqueMinimo[id] ?? null }, { chave: `estoque:${id}` });
+}
+
+async function gravarEstoqueProduto(d: { id: string; estoque_qtd: number | null; estoque_minimo: number | null }) {
   try {
     const { error } = await supabase
       .from("produtos")
-      .update({ estoque_qtd: s.estoqueQtd[id] ?? null, estoque_minimo: s.estoqueMinimo[id] ?? null })
-      .eq("id", id);
+      .update({ estoque_qtd: d.estoque_qtd, estoque_minimo: d.estoque_minimo })
+      .eq("id", d.id);
     if (error) throw error;
   } catch (e) {
     if (ehColunaFaltando(e)) return avisarSqlProdutos();
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar o estoque no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -1474,8 +1485,7 @@ async function removerProdutoSupabase(id: string) {
       alert("Para remover produtos em todos os aparelhos, rode o arquivo adicionar_estoque_produtos.sql no SQL Editor do Supabase (até lá a remoção vale só neste aparelho).");
       return;
     }
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível remover o produto no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
 
@@ -1571,14 +1581,18 @@ async function carregarAjustesFolha(dispatch: React.Dispatch<Action>) {
   dispatch({ type: "SET_AJUSTES_FOLHA_FROM_DB", ajustes });
 }
 
-async function sincronizarAjusteFolha(s: State, username: string, semana: string) {
+function enviarAjusteFolha(s: State, username: string, semana: string) {
   const a = s.ajustesFolha[`${username}|${semana}`];
   if (!a) return;
+  enviar("ajusteFolha", {
+    employee_username: username, semana_inicio: semana,
+    adicional: a.adicional || 0, desconto: a.desconto || 0, observacao: a.observacao?.trim() || null,
+  }, { chave: `ajuste:${username}|${semana}` });
+}
+
+async function gravarAjusteFolha(row: Record<string, unknown>) {
   try {
-    const { error } = await supabase.from("folha_ajustes").upsert({
-      employee_username: username, semana_inicio: semana,
-      adicional: a.adicional || 0, desconto: a.desconto || 0, observacao: a.observacao?.trim() || null,
-    }, { onConflict: "employee_username,semana_inicio" });
+    const { error } = await supabase.from("folha_ajustes").upsert(row, { onConflict: "employee_username,semana_inicio" });
     if (error) throw error;
   } catch (e) {
     if (tabelaFaltando(e)) {
@@ -1588,10 +1602,40 @@ async function sincronizarAjusteFolha(s: State, username: string, semana: string
       }
       return;
     }
-    // eslint-disable-next-line no-console
-    console.error("Não foi possível salvar o ajuste da folha no Supabase:", e);
+    throw e; // a fila decide: sem internet → reenvia; recusado pelo servidor → avisa na tela
   }
 }
+
+// ---- Fila de envio: o que cada tipo de lançamento faz no Supabase (ver lib/fila.ts) ----
+// Turno: vai a foto completa do turno; uma nova foto do mesmo turno substitui a que estava esperando.
+const enviarTurno = (t: Turno) => enviar("turno", t, { chave: `turno:${t.id}` });
+const enviarExclusaoTurno = (id: string) => enviar("turnoExcluir", id, { chave: `turno-excluir:${id}`, cancelar: [`turno:${id}`] });
+
+async function gravarDesconto(row: ReturnType<typeof descontoToRow>) {
+  const { error } = await supabase.from("descontos_funcionario").upsert(row, { onConflict: "employee_username,product_id" });
+  if (error) throw error;
+}
+async function removerDesconto(d: { username: string; productId: string }) {
+  const { error } = await supabase.from("descontos_funcionario").delete().eq("employee_username", d.username).eq("product_id", d.productId);
+  if (error) throw error;
+}
+async function gravarConfig(d: { cfg: ConfigGeral; taxas: TaxasMaquininha }) {
+  const error = await gravarConfigRow(d.cfg, d.taxas);
+  if (error) throw error;
+}
+
+registrarExecutor("turno", (t: Turno) => sincronizarTurnoCompleto(t));
+registrarExecutor("turnoExcluir", (id: string) => excluirTurnoSupabase(id));
+registrarExecutor("funcionario", (a: Action) => sincronizarFuncionario(a));
+registrarExecutor("ponto", (a: Action) => sincronizarPonto(a));
+registrarExecutor("retirada", (a: Action) => sincronizarRetirada(a));
+registrarExecutor("produto", gravarProdutoRow);
+registrarExecutor("estoque", gravarEstoqueProduto);
+registrarExecutor("produtoRemover", (id: string) => removerProdutoSupabase(id));
+registrarExecutor("desconto", gravarDesconto);
+registrarExecutor("descontoRemover", removerDesconto);
+registrarExecutor("config", gravarConfig);
+registrarExecutor("ajusteFolha", gravarAjusteFolha);
 
 const raw0 = (salvo: Partial<State>): State | null =>
   Object.keys(salvo).length > 0 ? { ...initialState(), ...salvo } : null;
@@ -1621,9 +1665,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {}
     dispatch({ type: "HYDRATE", state: raw0(localSalvo) });
 
+    // Antes de ler o banco, envia o que ficou guardado neste aparelho sem internet — assim o que vier
+    // do banco já inclui esses lançamentos.
+    const filaEnviada = processar();
+
     // 2) Carrega os funcionários do Supabase — a partir de agora, a lista de funcionários
     // (cadastro, senha, taxa por hora, etc.) mora no banco, não mais só no navegador.
     (async () => {
+      await filaEnviada;
       let { data, error } = await supabase.from("funcionarios").select("*").order("created_at");
       if (error?.code === "42501") {
         // Depois do seguranca_login.sql a coluna de senha não pode ser lida: busca as demais
@@ -1640,6 +1689,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // 3) Carrega o turno em andamento (se houver) e o histórico de turnos fechados do Supabase.
     // Se der erro de conexão, mantém o que está no aparelho (não apaga nada nem sobrescreve o banco).
     (async () => {
+      await filaEnviada;
       try {
         const { data: ativoRows, error: errAtivo } = await supabase
           .from("turnos").select("*").is("closed_at", null)
@@ -1669,6 +1719,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           historico = histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
         }
 
+        // Turnos ainda esperando a internet neste aparelho: a versão daqui vale (é a mais nova)
+        const excluidosAqui = new Set(pendentesDoTipo<string>("turnoExcluir"));
+        historico = historico.filter((t) => !excluidosAqui.has(t.id));
+        if (turnoAtivo && excluidosAqui.has(turnoAtivo.id)) turnoAtivo = null;
+        for (const t of pendentesDoTipo<Turno>("turno")) {
+          if (t.closedAt) {
+            historico = [t, ...historico.filter((h) => h.id !== t.id)];
+            if (turnoAtivo?.id === t.id) turnoAtivo = null;
+          } else if (!turnoAtivo || turnoAtivo.id === t.id) {
+            turnoAtivo = t;
+          }
+        }
+
         // O que veio do banco substitui o que estava no aparelho; nada disso é reenviado.
         turnoSujoRef.current = false;
         estoqueSujoRef.current = false;
@@ -1683,6 +1746,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     // 4) Carrega os registros de ponto (e o consumo de cada um) do Supabase
     (async () => {
+      await filaEnviada;
       const { data: pontoRows, error: errPontos } = await supabase
         .from("pontos").select("*").order("date", { ascending: false });
       if (errPontos) {
@@ -1705,6 +1769,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     // 5) Retiradas de caixa, descontos por funcionário e configurações (valores padrão + taxas das maquininhas)
     (async () => {
+      await filaEnviada;
       let migrar = false;
       try { migrar = localStorage.getItem(MIGRACAO_KEY) !== "1"; } catch {}
       const resultados = await Promise.all([
@@ -1718,10 +1783,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })();
 
     // 7) Adicional/desconto de cada semana (fechamento semanal da folha)
-    void carregarAjustesFolha(dispatch);
+    void filaEnviada.then(() => carregarAjustesFolha(dispatch));
 
     // 6) Produtos: preços, produtos cadastrados pelo dono, removidos e estoque
     (async () => {
+      await filaEnviada;
       let migrar = false;
       try { migrar = localStorage.getItem(MIGRACAO_PRODUTOS_KEY) !== "1"; } catch {}
       const ok = await carregarProdutos(dispatch, localSalvo, migrar, () => { estoqueSujoRef.current = false; });
@@ -1747,7 +1813,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const flushSincronizacaoTurno = () => {
     if (turnoSyncTimerRef.current) {
       cancelarSincronizacaoTurno();
-      if (turnoAtivoAnteriorRef.current) void sincronizarTurnoCompleto(turnoAtivoAnteriorRef.current);
+      if (turnoAtivoAnteriorRef.current) enviarTurno(turnoAtivoAnteriorRef.current);
     }
   };
 
@@ -1761,7 +1827,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     cancelarSincronizacaoTurno();
     turnoSyncTimerRef.current = setTimeout(() => {
       turnoSyncTimerRef.current = null;
-      void sincronizarTurnoCompleto(turno);
+      enviarTurno(turno);
     }, 500);
   }, [state.turnoAtivo]);
 
@@ -1776,11 +1842,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const flushTudo = () => { flushSincronizacaoTurno(); flushSyncPendentes(); };
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") flushTudo();
-      else recarregarProdutos();
+      else { void processar(); recarregarProdutos(); }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pagehide", flushTudo);
+    // Sem internet: tenta reenviar o que está esperando a cada 20 segundos
+    const tentarDeNovo = setInterval(() => { void processar(); }, 20000);
     return () => {
+      clearInterval(tentarDeNovo);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("pagehide", flushTudo);
     };
@@ -1794,7 +1863,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     for (const t of state.historico) {
       if (pendentes.has(t.id)) {
         pendentes.delete(t.id);
-        void sincronizarTurnoCompleto(t);
+        enviarTurno(t);
       }
     }
   }, [state.historico]);
@@ -1808,7 +1877,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const ids = new Set([...Object.keys(state.estoqueQtd), ...Object.keys(state.estoqueMinimo)]);
     for (const id of ids) {
       if (antes.q[id] === state.estoqueQtd[id] && antes.m[id] === state.estoqueMinimo[id]) continue;
-      agendarSync(`estoque:${id}`, () => sincronizarEstoqueProduto(stateRef.current, id));
+      agendarSync(`estoque:${id}`, async () => enviarEstoqueProduto(stateRef.current, id));
     }
   }, [state.estoqueQtd, state.estoqueMinimo]);
 
@@ -1842,7 +1911,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!antes.turnoAtivo) return;
       cancelarSincronizacaoTurno();
       turnoSujoRef.current = false;
-      void excluirTurnoSupabase(antes.turnoAtivo.id);
+      enviarExclusaoTurno(antes.turnoAtivo.id);
     } else if (a.type === "DELETE_TURNO") {
       // Remove do Supabase (os itens do turno somem junto) e cancela qualquer envio pendente dele
       if (antes.turnoAtivo?.id === a.id) {
@@ -1850,65 +1919,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         turnoSujoRef.current = false;
       }
       histPendentesRef.current.delete(a.id);
-      void excluirTurnoSupabase(a.id);
+      enviarExclusaoTurno(a.id);
     } else if (a.type === "ADD_FUNC" || a.type === "UPDATE_FUNC" || a.type === "REMOVE_FUNC") {
-      void sincronizarFuncionario(a);
+      enviar("funcionario", a);
     } else if (a.type === "ADD_PONTO" || a.type === "REMOVE_PONTO" || a.type === "UPDATE_PONTO" || a.type === "UPDATE_PONTO_CONSUMO") {
-      void sincronizarPonto(a);
+      enviar("ponto", a, a.type === "UPDATE_PONTO_CONSUMO" ? { chave: `pc:${a.pontoId}|${a.productId}` } : {});
     } else if (a.type === "ADD_RETIRADA" || a.type === "REMOVE_RETIRADA") {
-      void sincronizarRetirada(a);
+      enviar("retirada", a);
     } else if (a.type === "ADD_PRODUCT") {
       // Produto novo vai para o banco junto com o preço (o estado ainda não tem o produto: monta na hora)
       const s = { ...antes, bebidas: [...antes.bebidas, a.b], precos: { ...antes.precos, [a.b.id]: a.b.price } };
-      void sincronizarPrecoProduto(s, a.b.id);
+      enviarPrecoProduto(s, a.b.id);
     } else if (a.type === "SET_PRICE") {
       // Lê o preço na hora do envio (estado mais recente), então digitar "12" grava 12, não "1"
-      agendarSync(`preco:${a.productId}`, () => sincronizarPrecoProduto(stateRef.current, a.productId));
+      agendarSync(`preco:${a.productId}`, async () => enviarPrecoProduto(stateRef.current, a.productId));
     } else if (a.type === "REMOVE_PRODUCT") {
-      void removerProdutoSupabase(a.productId);
+      enviar("produtoRemover", a.productId, { chave: `produto-remover:${a.productId}` });
     } else if (a.type === "SET_DESCONTO_FUNCIONARIO") {
       // O valor é lido na hora do envio (estado mais recente), então digitar "30" grava 30, não "3"
       const chave = `desconto:${a.username}|${a.productId}`;
       agendarSync(chave, async () => {
         const cfg = stateRef.current.descontosPorFuncionario[a.username]?.[a.productId];
-        if (!cfg) return;
-        try {
-          const { error } = await supabase
-            .from("descontos_funcionario")
-            .upsert(descontoToRow(a.username, a.productId, cfg), { onConflict: "employee_username,product_id" });
-          if (error) throw error;
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error("Não foi possível salvar o desconto no Supabase:", e);
-        }
+        if (cfg) enviar("desconto", descontoToRow(a.username, a.productId, cfg), { chave });
       });
     } else if (a.type === "REMOVE_DESCONTO_FUNCIONARIO") {
       const chave = `desconto:${a.username}|${a.productId}`;
       cancelarSyncPendente(chave);
-      enfileirarSync(chave, async () => {
-        try {
-          const { error } = await supabase
-            .from("descontos_funcionario").delete()
-            .eq("employee_username", a.username).eq("product_id", a.productId);
-          if (error) throw error;
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error("Não foi possível remover o desconto no Supabase:", e);
-        }
-      });
+      // Mesma chave do envio do desconto: se ele ainda estava esperando a internet, a remoção o substitui
+      enviar("descontoRemover", { username: a.username, productId: a.productId }, { chave });
     } else if (a.type === "SET_AJUSTE_FOLHA") {
       // Lido na hora do envio: digitar "30" grava 30, não "3"
-      agendarSync(`ajuste:${a.username}|${a.semana}`, () => sincronizarAjusteFolha(stateRef.current, a.username, a.semana));
+      agendarSync(`ajuste:${a.username}|${a.semana}`, async () => enviarAjusteFolha(stateRef.current, a.username, a.semana));
     } else if (a.type === "SET_CONFIG_GERAL" || a.type === "SET_TAXAS_MAQUININHA") {
       agendarSync("config_geral", async () => {
         const st = stateRef.current;
-        try {
-          const error = await gravarConfigRow(st.configGeral, st.taxasMaquininha);
-          if (error) throw error;
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error("Não foi possível salvar as configurações no Supabase:", e);
-        }
+        enviar("config", { cfg: st.configGeral, taxas: st.taxasMaquininha }, { chave: "config" });
       });
     }
   };
