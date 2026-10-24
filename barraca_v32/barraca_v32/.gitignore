@@ -1,0 +1,10 @@
+# Dependências e arquivos gerados pelo build (são recriados com npm install / npm run build)
+node_modules/
+.output/
+.wrangler/
+dist/
+
+# Configuração local com as chaves do Supabase: fica só no seu computador
+.env
+.env.*
+!.env.example

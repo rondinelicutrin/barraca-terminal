@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { AvisoEnvio } from "@/components/AvisoEnvio";
 import { useStore } from "@/lib/store";
 import { Home, ClipboardList, Package, LogOut, LayoutDashboard, Users, BarChart3, LineChart } from "lucide-react";
 
@@ -70,6 +71,7 @@ export function TopBar({ title, right }: { title: string; right?: React.ReactNod
         </div>
         {right}
       </div>
+      <AvisoEnvio />
     </header>
   );
 }

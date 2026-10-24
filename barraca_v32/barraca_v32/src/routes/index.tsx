@@ -76,6 +76,7 @@ function LoginPage() {
           <div className="text-5xl mb-2">🥟</div>
           <h1 className="text-2xl font-bold tracking-tight">Barraca Terminal</h1>
           <p className="text-sm text-muted-foreground">Controle de vendas</p>
+          <p className="text-[11px] text-muted-foreground mt-1">Versão {__APP_VERSION__.split(".")[0]}</p>
         </div>
         <form onSubmit={submit} className="space-y-3">
           <div>
