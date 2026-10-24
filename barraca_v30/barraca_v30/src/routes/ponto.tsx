@@ -90,26 +90,11 @@ function PontoPage() {
   const [showDescarte, setShowDescarte] = useState(false);
   const [turnoFechado, setTurnoFechado] = useState<Turno | null>(null);
 
-  // Com turno aberto, já deixa marcados (com "registrar ponto") todos que estão nele além de mim —
-  // antes era preciso marcar um por um, e quem ficava de fora travava o fechamento.
+  // Colegas NÃO são marcados automaticamente (antes já vinham com "registrar ponto" ligado e isso gerava
+  // ponto lançado para quem não devia). Quem está fazendo o lançamento toca no nome do colega e decide:
+  // ponto, consumo ou os dois.
   const turnoAtivo = state.turnoAtivo;
-  const [prefillFeito, setPrefillFeito] = useFiltro<string>(`${rascunho}.prefill`, "");
-  useEffect(() => {
-    if (!turnoAtivo || !me) return;
-    const chave = `${turnoAtivo.date}|${turnoAtivo.shift}`;
-    if (prefillFeito === chave) return;
-    setPrefillFeito(chave);
-    const pessoas = [turnoAtivo.employee, ...(turnoAtivo.outrosFuncionarios ?? [])].filter((u) => u !== me.username);
-    const next = { ...colegas };
-    for (const u of pessoas) {
-      if (next[u]) continue;
-      const f = state.funcionarios.find((x) => x.username === u);
-      const jaTem = state.pontos.some((p) => p.employeeUsername === u && p.date === turnoAtivo.date && !ehSoConsumo(p));
-      next[u] = { nome: f?.nome ?? u, registrar: !jaTem, consumir: false, entrada: "18:00", saida: "23:00" };
-    }
-    setColegas(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turnoAtivo?.date, turnoAtivo?.shift, state.funcionarios.length]);
+  const noTurno = new Set(turnoAtivo ? [turnoAtivo.employee, ...(turnoAtivo.outrosFuncionarios ?? [])] : []);
 
   // Só depois de todos os hooks: sair antes deles fazia o React quebrar ao recarregar a página (F5)
   if (!me) return null;
@@ -131,8 +116,8 @@ function PontoPage() {
       }
       return;
     }
-    // Ao marcar alguém, já vem com "registrar ponto" ligado (o caso mais comum); desligue para lançar só o consumo
-    setColegas({ ...colegas, [username]: { nome, registrar: true, consumir: false, entrada: "18:00", saida: "23:00" } });
+    // Nada vem marcado: quem está lançando escolhe "Registrar ponto" e/ou "Lançar consumo" para o colega
+    setColegas({ ...colegas, [username]: { nome, registrar: false, consumir: false, entrada: "18:00", saida: "23:00" } });
   }
 
   function updColega(username: string, patch: Partial<Colega>) {
@@ -176,6 +161,12 @@ function PontoPage() {
       })),
     ];
 
+    // Colega tocado sem escolher nada: pergunta em vez de ignorar em silêncio
+    const semEscolha = Object.entries(colegas).filter(([, c]) => !c.registrar && !c.consumir).map(([, c]) => c.nome);
+    if (semEscolha.length > 0) {
+      alert(`Escolha "Registrar ponto" e/ou "Lançar consumo" para: ${semEscolha.join(", ")}.\n\nSe não for lançar nada para essa pessoa, toque no nome dela de novo para tirar.`);
+      return;
+    }
     const querPonto = alvos.filter((a) => a.ponto);
     if (querPonto.some((a) => !a.ent || !a.sai)) { alert("Preencha entrada e saída!"); return; }
     if (alvos.every((a) => !a.ponto && a.itens.length === 0)) {
@@ -337,6 +328,10 @@ function PontoPage() {
           {/* Colegas de turno */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Colegas no turno</label>
+            <p className="text-[11px] text-muted-foreground mb-1.5">
+              Toque no nome do colega e escolha o que lançar para ele: ponto, consumo ou os dois.
+              {noTurno.size > 0 && " ● = está no turno aberto."}
+            </p>
             {outros.length === 0 && (
               <span className="text-xs text-muted-foreground">Nenhum outro funcionário cadastrado.</span>
             )}
@@ -348,13 +343,13 @@ function PontoPage() {
                     key={f.id}
                     type="button"
                     onClick={() => toggleColega(f.username, f.nome)}
-                    className={`text-xs px-2 h-7 rounded-full border transition-colors ${
+                    className={`text-sm px-3 h-9 rounded-full border transition-colors ${
                       on
                         ? "bg-primary text-primary-foreground border-primary"
                         : "bg-card border-border text-muted-foreground"
                     }`}
                   >
-                    {f.nome}
+                    {noTurno.has(f.username) ? "● " : ""}{f.nome}
                   </button>
                 );
               })}
