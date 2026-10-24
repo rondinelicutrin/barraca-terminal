@@ -31,7 +31,7 @@ export function BottomNav() {
       ];
 
   return (
-    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[520px] bg-card/95 backdrop-blur border-t border-border z-40">
+    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[520px] bg-card/95 backdrop-blur border-t border-border z-40 safe-bottom">
       <div className="flex items-center justify-around px-2 py-1.5">
         {items.map((it) => {
           const active = pathname === it.to || (it.to !== "/owner" && pathname.startsWith(it.to));
@@ -62,10 +62,11 @@ export function BottomNav() {
 export function TopBar({ title, right }: { title: string; right?: React.ReactNode }) {
   return (
     <header className="sticky top-0 z-30 bg-background/95 backdrop-blur border-b border-border">
-      <div className="flex items-center justify-between px-4 h-14">
-        <div className="flex items-center gap-2">
+      {/* No celular, se os links não couberem ao lado do título, eles descem para a linha de baixo */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 px-4 min-h-14 py-1">
+        <div className="flex items-center gap-2 shrink-0 min-h-12">
           <span className="text-primary text-xl">🥟</span>
-          <h1 className="font-semibold tracking-tight">{title}</h1>
+          <h1 className="font-semibold tracking-tight whitespace-nowrap">{title}</h1>
         </div>
         {right}
       </div>
@@ -76,7 +77,7 @@ export function TopBar({ title, right }: { title: string; right?: React.ReactNod
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen w-full flex justify-center bg-background">
-      <div className="w-full max-w-[520px] pb-20 min-h-screen relative">{children}</div>
+      <div className="w-full max-w-[520px] pb-[calc(5rem+env(safe-area-inset-bottom))] min-h-screen relative">{children}</div>
     </div>
   );
 }
