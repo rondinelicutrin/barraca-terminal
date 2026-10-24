@@ -56,7 +56,10 @@ export const chaveAjuste = (username: string, semana: string) => `${username}|${
 
 export interface ItemConsumoDetalhe { productId: string; nome: string; qty: number; valor: number }
 export interface ConsumoDoDia { date: string; pontoId: string; itens: ItemConsumoDetalhe[]; subtotal: number }
-export interface DiaTrabalhado { date: string; entrada: string; saida: string; horas: number }
+export interface DiaTrabalhado {
+  pontoId: string; date: string; entrada: string; saida: string; horas: number;
+  transporte: number; refeicao: number; temConsumo: boolean;
+}
 
 export interface Folha {
   horas: number;
@@ -101,7 +104,10 @@ export function calcularFolha(state: State, f: Funcionario, meus: Ponto[], from?
       ref += p.refeicao;
       diasSet.add(p.date);
       semanasSet.add(inicioSemana(p.date));
-      dias.push({ date: p.date, entrada: p.entrada, saida: p.saida, horas: h });
+      dias.push({
+        pontoId: p.id, date: p.date, entrada: p.entrada, saida: p.saida, horas: h,
+        transporte: p.transporte, refeicao: p.refeicao, temConsumo: p.consumo.length > 0,
+      });
     }
     if (p.consumo.length > 0) {
       const valores = valoresConsumoPonto(state, f.username, p.consumo);
