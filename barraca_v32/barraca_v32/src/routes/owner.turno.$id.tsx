@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import {
-  useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina,
+  useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina, maqAbaixoDaBase, valorComparadoMaq,
   type Turno, type ShiftItem,
 } from "@/lib/store";
 import { BRL, formatDateBR, shiftLabel } from "@/lib/format";
@@ -55,6 +55,13 @@ function EditTurno() {
     setLocal({ ...local, caixa: { ...local.caixa, [which]: { ...local.caixa[which], ...patch } } });
 
   const save = () => {
+    const abaixo = (local.caixa.maq2Ativa ? (["maq1", "maq2"] as const) : (["maq1"] as const))
+      .filter((m) => maqAbaixoDaBase(local.caixa[m], local.shift));
+    if (abaixo.length > 0) {
+      alert(`O valor da maquininha só pode ser IGUAL OU MAIOR que o do turno anterior:\n\n` +
+        abaixo.map((m) => `• ${nomeMaquina(state.taxasMaquininha, m)}: ${BRL(valorComparadoMaq(local.caixa[m], local.shift))} (turno anterior ${BRL(local.caixa[m].base)})`).join("\n"));
+      return;
+    }
     if (isAtivo) {
       dispatch({ type: "EDIT_ATIVO", turno: local });
     } else {
@@ -167,12 +174,17 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
   const dinheiroRestante = dinheiroNoCaixa(c);
   const variacaoMoedas = (c.moedasFinal || 0) - (c.moedasInicial || 0);
 
-  const money = (label: string, val: number, on: (n: number) => void) => (
+  const money = (label: string, val: number, on: (n: number) => void, onBlur?: (n: number) => void) => (
     <div>
       <label className="text-xs text-muted-foreground">{label}</label>
-      <BufferedNumberInput value={val} placeholder="0,00" className="mt-1 w-full h-10" onChange={on} />
+      <BufferedNumberInput value={val} placeholder="0,00" className="mt-1 w-full h-10" onChange={on} onBlur={onBlur} />
     </div>
   );
+  // Maquininha nunca menor que o turno anterior (base): avisa ao terminar de digitar
+  const conferir = (which: "maq1" | "maq2") => (n: number) => {
+    const base = c[which].base ?? 0;
+    if (n < base) alert(`O valor da ${nomeMaquina(state.taxasMaquininha, which)} só pode ser IGUAL OU MAIOR que o valor do turno anterior (${BRL(base)}).`);
+  };
 
   return (
     <div className="p-3 space-y-3">
@@ -205,9 +217,9 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
       <div className="bg-card border border-border rounded-xl p-3 space-y-2">
         <div className="text-sm font-medium">{nomeMaquina(state.taxasMaquininha, "maq1")}</div>
         <div className="text-xs text-muted-foreground">Base: <span className="mono">{BRL(c.maq1.base)}</span></div>
-        {!isNoite ? money("Valor exibido", c.maq1.display, (n) => updMaq("maq1", { display: n })) :
+        {!isNoite ? money("Valor exibido", c.maq1.display, (n) => updMaq("maq1", { display: n }), conferir("maq1")) :
           <div className="grid grid-cols-2 gap-2">
-            {money("Até 00:00", c.maq1.ate00 ?? 0, (n) => updMaq("maq1", { ate00: n, display: n }))}
+            {money("Até 00:00", c.maq1.ate00 ?? 0, (n) => updMaq("maq1", { ate00: n, display: n }), conferir("maq1"))}
             {money("Após 00:00", c.maq1.apos00 ?? 0, (n) => updMaq("maq1", { apos00: n }))}
           </div>}
         <div className="text-right text-sm">Real: <span className="mono font-semibold text-primary">{BRL(realMaq(c.maq1, local.shift))}</span></div>
@@ -219,9 +231,9 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
         </label>
         {c.maq2Ativa && (
           <>
-            {!isNoite ? money("Valor exibido", c.maq2.display, (n) => updMaq("maq2", { display: n })) :
+            {!isNoite ? money("Valor exibido", c.maq2.display, (n) => updMaq("maq2", { display: n }), conferir("maq2")) :
               <div className="grid grid-cols-2 gap-2">
-                {money("Até 00:00", c.maq2.ate00 ?? 0, (n) => updMaq("maq2", { ate00: n, display: n }))}
+                {money("Até 00:00", c.maq2.ate00 ?? 0, (n) => updMaq("maq2", { ate00: n, display: n }), conferir("maq2"))}
                 {money("Após 00:00", c.maq2.apos00 ?? 0, (n) => updMaq("maq2", { apos00: n }))}
               </div>}
             <div className="text-right text-sm">Real: <span className="mono font-semibold text-primary">{BRL(realMaq(c.maq2, local.shift))}</span></div>

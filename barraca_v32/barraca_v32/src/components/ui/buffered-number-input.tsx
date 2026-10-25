@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 interface BufferedNumberInputProps {
   value: number;
   onChange: (n: number) => void;
+  onBlur?: (n: number) => void; // ao sair do campo (terminou de digitar), com o valor final
   decimal?: boolean; // true = aceita vírgula decimal; false (padrão) = inteiro
   placeholder?: string;
   className?: string;
@@ -17,7 +18,7 @@ interface BufferedNumberInputProps {
 // Input numérico que mantém o texto digitado em um buffer local, evitando que o
 // valor seja reformatado a cada tecla (o que impedia digitar a vírgula decimal).
 export function BufferedNumberInput({
-  value, onChange, decimal = true, placeholder, className, readOnly, disabled,
+  value, onChange, onBlur, decimal = true, placeholder, className, readOnly, disabled,
 }: BufferedNumberInputProps) {
   const display = React.useCallback(
     (n: number) => (n ? (decimal ? num(n) : String(n)) : ""),
@@ -39,7 +40,11 @@ export function BufferedNumberInput({
       disabled={disabled}
       value={text}
       onFocus={() => { focused.current = true; }}
-      onBlur={() => { focused.current = false; setText(display(value)); }}
+      onBlur={() => {
+        focused.current = false;
+        setText(display(value));
+        onBlur?.(decimal ? parseBR(text) : parseInt2(text));
+      }}
       onChange={(e) => {
         const raw = e.target.value;
         setText(raw);

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, type Turno, type TaxasMaquininha } from "@/lib/store";
+import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
@@ -33,8 +33,7 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
 export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
   const { state } = useStore();
   const gerar = (formato: "pdf" | "csv") => {
-    const rel = montarRelatorioSobras(turno, getAllProducts(state), state.funcionarios);
-    if (rel.grupos.length === 0) { alert("Nenhuma sobra registrada neste turno."); return; }
+    const rel = montarRelatorioSobras(turno, getAllProducts(state), state.funcionarios, state.taxasMaquininha);
     if (formato === "pdf") baixarRelatorioSobrasPdf(rel);
     else baixarRelatorioSobrasCsv(rel);
   };
@@ -103,6 +102,16 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       alert(`A sobra não pode ser maior que entrada + chegada. Corrija no menu Turno antes de fechar:\n\n${sobraDemais.map((p) => `• ${p.name}`).join("\n")}`);
       return;
     }
+    // Maquininha nunca pode ficar menor que o valor do turno anterior (base)
+    const maqsAbaixo = (t.caixa.maq2Ativa ? (["maq1", "maq2"] as const) : (["maq1"] as const))
+      .filter((m) => maqAbaixoDaBase(t.caixa[m], t.shift));
+    if (maqsAbaixo.length > 0) {
+      alert(`ATENÇÃO: O VALOR DA MAQUININHA SÓ PODE SER IGUAL OU MAIOR QUE O DO TURNO ANTERIOR.\n\n` +
+        maqsAbaixo.map((m) => `• ${nomeMaquina(state.taxasMaquininha, m)}: lançado ${BRL(valorComparadoMaq(t.caixa[m], t.shift))}, ` +
+          `turno anterior ${BRL(t.caixa[m].base)}`).join("\n") +
+        `\n\nCorrija no menu Turno → Caixa antes de fechar.`);
+      return;
+    }
     const naoPreenchidos = camposObrigatoriosDoTurno(t, state.taxasMaquininha)
       .filter(({ key }) => !(t.caixa.camposPreenchidos?.[key] ?? false))
       .map(({ label }) => label);
@@ -112,7 +121,7 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
     }
     if (confirm("Fechar turno? Não poderá mais editar campos aqui (o dono pode editar depois).")) {
       dispatch({ type: "CLOSE_SHIFT" });
-      onClosed({ ...t, closedAt: Date.now() });
+      onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
     }
   };
 
@@ -174,7 +183,7 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
     .filter(({ p }) => !EXCLUIR_DO_TOTAL_PASTEL.has(p.id))
     .reduce((s, { item }) => s + (item!.sobra ?? 0), 0);
 
-  const rel = montarRelatorioSobras(turno, getAllProducts(state), state.funcionarios);
+  const rel = montarRelatorioSobras(turno, getAllProducts(state), state.funcionarios, state.taxasMaquininha);
 
   return (
     <>
@@ -187,8 +196,18 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
             {shiftLabel(turno.shift)} · {turno.date.split("-").reverse().join("/")}
           </div>
           <div className="text-xs text-muted-foreground">
-            Fechamento: {rel.fechadoPor}{rel.colegas.length > 0 ? ` · Colegas: ${rel.colegas.join(", ")}` : ""}
+            {rel.abertoPor === rel.fechadoPor ? `Fechado por: ${rel.fechadoPor}` : `Aberto por: ${rel.abertoPor} · Fechado por: ${rel.fechadoPor}`}
+            {rel.colegas.length > 0 ? ` · Colegas: ${rel.colegas.join(", ")}` : ""}
           </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-3 space-y-1">
+          <div className="text-sm font-medium mb-1">Resultado do turno</div>
+          <Row label="Esperado" value={BRL(rel.esperado)} />
+          <Row label="Arrecadado" value={BRL(rel.arrecadado)} />
+          <Row label="Diferença" value={BRL(rel.diferenca)}
+            valueClass={Math.abs(rel.diferenca) < 0.5 ? "text-success" : rel.diferenca > 0 ? "text-warning" : "text-destructive"} />
+          <div className="text-center text-sm pt-1">{rel.situacao}</div>
         </div>
 
         <div className="bg-card border border-border rounded-xl p-3">
@@ -227,9 +246,10 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
         </div>
 
         <div className="bg-card border border-border rounded-xl p-3 space-y-2">
-          <div className="text-sm font-medium">Relatório de sobras (todos os produtos)</div>
+          <div className="text-sm font-medium">Relatório do fechamento (caixa, maquininhas, consumos e sobras)</div>
           <p className="text-[11px] text-muted-foreground">
-            Inclui o nome de quem fechou o turno e dos colegas. Gere o arquivo e envie para o dono.
+            Inclui dinheiro, moedas, pix, maquininhas (valor anterior e lançado), consumos, esperado × arrecadado,
+            sobras de todos os produtos e quem fechou o turno. Gere o arquivo e envie para o dono.
           </p>
           <RelatorioSobrasBotoes turno={turno} />
         </div>

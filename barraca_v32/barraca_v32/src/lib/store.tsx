@@ -51,6 +51,7 @@ export interface Turno {
   caixa: Caixa;
   createdAt: number;
   closedAt?: number;
+  fechadoPor?: string; // username de quem fechou (pode ser diferente de quem abriu)
   editado?: boolean;
   precosSnapshot: Record<string, number>;
 }
@@ -414,6 +415,7 @@ function turnoFromRow(row: any, items: Record<string, ShiftItem>): Turno {
     caixa: caixaFromRow(row),
     createdAt: new Date(row.created_at).getTime(),
     closedAt: row.closed_at ? new Date(row.closed_at).getTime() : undefined,
+    fechadoPor: row.fechado_por ?? undefined,
     editado: row.editado ?? false,
     precosSnapshot: row.precos_snapshot ?? {},
   };
@@ -447,6 +449,8 @@ function turnoToRow(t: Turno) {
     precos_snapshot: t.precosSnapshot,
     closed_at: t.closedAt ? new Date(t.closedAt).toISOString() : null,
     editado: t.editado ?? false,
+    // Só vai quando existe (precisa do adicionar_fechado_por.sql; sem a coluna, o turno é salvo sem ele)
+    ...(t.fechadoPor ? { fechado_por: t.fechadoPor } : {}),
   };
 }
 
@@ -455,7 +459,11 @@ function turnoToRow(t: Turno) {
 // ou corrigido pelo dono (chamada na hora).
 async function sincronizarTurnoCompleto(t: Turno) {
   try {
-    const { error: errTurno } = await supabase.from("turnos").upsert(turnoToRow(t), { onConflict: "id" });
+    let { error: errTurno } = await supabase.from("turnos").upsert(turnoToRow(t), { onConflict: "id" });
+    if (errTurno && t.fechadoPor && ehColunaFaltando(errTurno)) {
+      // Banco ainda sem a coluna "fechado_por": salva o turno sem ela (nada se perde do fechamento)
+      ({ error: errTurno } = await supabase.from("turnos").upsert(turnoToRow({ ...t, fechadoPor: undefined }), { onConflict: "id" }));
+    }
     if (errTurno) throw errTurno;
     const itemRows = Object.entries(t.items).map(([productId, it]) => itemToRow(t.id, productId, it));
     if (itemRows.length > 0) {
@@ -679,7 +687,7 @@ function reducer(s: State, a: Action): State {
     }
     case "CLOSE_SHIFT": {
       if (!s.turnoAtivo) return s;
-      const closed: Turno = { ...s.turnoAtivo, closedAt: Date.now() };
+      const closed: Turno = { ...s.turnoAtivo, closedAt: Date.now(), fechadoPor: s.currentUser?.username };
       n = {
         ...s,
         turnoAtivo: null,
@@ -1095,6 +1103,18 @@ export function realMaq(m: MaquininhaState, shift: ShiftKey): number {
     return Math.max(0, a) + Math.max(0, b);
   }
   return Math.max(0, (m.display ?? 0) - m.base);
+}
+
+// Valor lançado na maquininha que é comparado com o do turno anterior (base): o "valor exibido" nos
+// turnos do dia; na noite, o "até 00:00" (depois da meia-noite a maquininha zera, então o "após 00:00"
+// começa do zero e não é comparado).
+export function valorComparadoMaq(m: MaquininhaState, shift: ShiftKey): number {
+  return shift === "noite" ? (m.ate00 ?? m.display ?? 0) : (m.display ?? 0);
+}
+
+// Nunca pode ficar menor que o valor do turno anterior (evita erro no fechamento)
+export function maqAbaixoDaBase(m: MaquininhaState, shift: ShiftKey): boolean {
+  return valorComparadoMaq(m, shift) < (m.base ?? 0);
 }
 
 export function arrecadadoTurno(t: Turno): number {
