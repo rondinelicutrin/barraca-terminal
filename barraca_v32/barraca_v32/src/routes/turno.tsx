@@ -160,7 +160,7 @@ function StartShift() {
         </div>
 
         <div className="bg-card border border-border rounded-xl p-4 space-y-2">
-          <div className="text-sm font-medium">Relatório de sobras do último turno fechado</div>
+          <div className="text-sm font-medium">Relatório do último turno fechado (caixa e sobras)</div>
           {ultimoFechado ? (
             <>
               <div className="text-xs text-muted-foreground">
@@ -266,7 +266,7 @@ function ActiveShift() {
       {/* O fechamento (Esperado / Arrecadado / Diferença) agora fica no menu Ponto */}
       <div className="px-3 pb-4 space-y-3">
         <div className="bg-card border border-border rounded-xl p-3 space-y-2">
-          <div className="text-sm font-medium">Relatório de sobras</div>
+          <div className="text-sm font-medium">Relatório do turno (caixa e sobras)</div>
           <p className="text-[11px] text-muted-foreground">
             Gera o arquivo com as sobras dos produtos, o nome de quem está fechando e dos colegas.
             Para o relatório completo, preencha todas as sobras antes de gerar.
@@ -500,6 +500,9 @@ function CaixaView({ camposObrigatorios }: { camposObrigatorios: { key: string; 
 
   const markFilled = (key: string) =>
     upd({ camposPreenchidos: { ...c.camposPreenchidos, [key]: true } });
+  // Valor da maquininha menor que o do turno anterior: o campo volta a contar como não preenchido
+  const desmarcar = (key: string) =>
+    upd({ camposPreenchidos: { ...c.camposPreenchidos, [key]: false } });
 
   return (
     <div className="p-3 space-y-3">
@@ -595,6 +598,7 @@ function CaixaView({ camposObrigatorios }: { camposObrigatorios: { key: string; 
         real={maq1Real}
         onChange={(patch) => updMaq("maq1", patch)}
         onFilled={(campo) => markFilled(`maq1.${campo}`)}
+        onInvalido={(campo) => desmarcar(`maq1.${campo}`)}
         preench={(campo) => !!c.camposPreenchidos?.[`maq1.${campo}`]}
       />
 
@@ -615,6 +619,7 @@ function CaixaView({ camposObrigatorios }: { camposObrigatorios: { key: string; 
             real={maq2Real}
             onChange={(patch) => updMaq("maq2", patch)}
             onFilled={(campo) => markFilled(`maq2.${campo}`)}
+            onInvalido={(campo) => desmarcar(`maq2.${campo}`)}
             preench={(campo) => !!c.camposPreenchidos?.[`maq2.${campo}`]}
             bare
           />
@@ -625,16 +630,36 @@ function CaixaView({ camposObrigatorios }: { camposObrigatorios: { key: string; 
 }
 
 type CampoMaq = "display" | "ate00" | "apos00";
-function MaquininhaCard({ label, m, isNoite, real, onChange, onFilled, preench, bare }: {
+function MaquininhaCard({ label, m, isNoite, real, onChange, onFilled, onInvalido, preench, bare }: {
   label: string;
   m: any;
   isNoite: boolean;
   real: number;
   onChange: (patch: any) => void;
   onFilled: (campo: CampoMaq) => void;
+  onInvalido: (campo: CampoMaq) => void;
   preench: (campo: CampoMaq) => boolean;
   bare?: boolean;
 }) {
+  // O valor nunca pode ser menor que o do turno anterior (base). Confere quando a pessoa termina de
+  // digitar (sai do campo) — conferir a cada tecla daria alerta no meio da digitação.
+  const base: number = m.base ?? 0;
+  const [abaixo, setAbaixo] = useState(false);
+  const conferir = (campo: CampoMaq) => (n: number) => {
+    if (n < base) {
+      alert(`ATENÇÃO: o valor da ${label} só pode ser IGUAL OU MAIOR que o valor do turno anterior (${BRL(base)}).\n\n` +
+        `Você lançou ${BRL(n)}. Confira o valor exibido na maquininha e corrija.`);
+      onInvalido(campo);
+      setAbaixo(true);
+    } else {
+      setAbaixo(false);
+    }
+  };
+  const avisoAbaixo = abaixo && (
+    <p className="text-[11px] font-semibold text-destructive mt-1">
+      Menor que o turno anterior ({BRL(base)}). O valor só pode ser igual ou maior.
+    </p>
+  );
   // Todos os campos da maquininha são obrigatórios: no turno da noite os dois valores
   const preenchido = isNoite ? preench("ate00") && preench("apos00") : preench("display");
   const cls = bare ? "space-y-2" : "bg-card border border-border rounded-xl p-3 space-y-2";
@@ -663,7 +688,9 @@ function MaquininhaCard({ label, m, isNoite, real, onChange, onFilled, preench, 
             placeholder="0,00"
             className={`mt-1 w-full h-10 px-3 ${!preenchido ? "border-warning" : "border-border"}`}
             onChange={(n) => { onChange({ display: n }); onFilled("display"); }}
+            onBlur={conferir("display")}
           />
+          {avisoAbaixo}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-2">
@@ -677,7 +704,9 @@ function MaquininhaCard({ label, m, isNoite, real, onChange, onFilled, preench, 
               placeholder="0,00"
               className={`mt-1 w-full h-10 px-3 ${!preench("ate00") ? "border-warning" : "border-border"}`}
               onChange={(n) => { onChange({ ate00: n, display: n }); onFilled("ate00"); }}
+              onBlur={conferir("ate00")}
             />
+            {avisoAbaixo}
           </div>
           <div>
             <label className="text-xs text-muted-foreground flex gap-1">
@@ -690,6 +719,7 @@ function MaquininhaCard({ label, m, isNoite, real, onChange, onFilled, preench, 
               className={`mt-1 w-full h-10 px-3 ${!preench("apos00") ? "border-warning" : "border-border"}`}
               onChange={(n) => { onChange({ apos00: n }); onFilled("apos00"); }}
             />
+            <p className="text-[10px] text-muted-foreground mt-1">A maquininha zera à meia-noite: este valor começa do 0.</p>
           </div>
         </div>
       )}

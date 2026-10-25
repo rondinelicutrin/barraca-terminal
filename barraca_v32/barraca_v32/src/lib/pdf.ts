@@ -10,6 +10,19 @@ export interface PdfSection {
   bars?: { label: string; value: number; valueText: string }[];
 }
 
+// A fonte padrão do PDF (Helvetica) só tem os caracteres do português/latim. Emojis (☀️ 🌙) e alguns
+// símbolos saíam como lixo (ex.: "&þ Manhã"): aqui eles são removidos ou trocados por equivalentes.
+const TROCAS: Record<string, string> = { "→": "->", "←": "<-", "−": "-", "≥": ">=", "≤": "<=", "✓": "", "✔": "", "⚠": "" };
+const PERMITIDOS_FORA_LATIN1 = new Set(["—", "–", "“", "”", "‘", "’", "•", "…", "€"]);
+export function textoParaPdf(texto: string): string {
+  let out = "";
+  for (const ch of texto) {
+    if (TROCAS[ch] !== undefined) out += TROCAS[ch];
+    else if ((ch.codePointAt(0) ?? 0) <= 0xff || PERMITIDOS_FORA_LATIN1.has(ch)) out += ch;
+  }
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
 // Gera e baixa um PDF simples de tabelas — usado nos relatórios de sobras.
 // Baixa o arquivo diretamente (doc.save), sem abrir a caixa de impressão do navegador.
 export function gerarRelatorioPdf(opts: {
@@ -19,6 +32,10 @@ export function gerarRelatorioPdf(opts: {
   sections: PdfSection[];
 }) {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
+  // Todo texto escrito no PDF passa pela limpeza acima
+  const escrever = doc.text.bind(doc) as (...args: any[]) => jsPDF;
+  (doc as any).text = (t: string | string[], ...resto: any[]) =>
+    escrever(Array.isArray(t) ? t.map(textoParaPdf) : textoParaPdf(String(t)), ...resto);
   const marginX = 40;
   const pageHeight = doc.internal.pageSize.getHeight();
   const pageWidth = doc.internal.pageSize.getWidth();
