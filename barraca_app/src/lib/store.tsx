@@ -226,6 +226,8 @@ type Action =
   | { type: "DELETE_TURNO"; id: string }
   | { type: "EDIT_HIST"; id: string; turno: Turno }
   | { type: "EDIT_ATIVO"; turno: Turno }
+  // Dono: corrige só o "valor do turno anterior" (base) das maquininhas de um turno (sem mexer no estoque)
+  | { type: "AJUSTAR_BASE_MAQ"; id: string; bases: { maq1?: number; maq2?: number } }
   | { type: "ADD_FUNC"; f: Funcionario }
   | { type: "REMOVE_FUNC"; id: string }
   | { type: "UPDATE_FUNC"; id: string; patch: Partial<Funcionario> }
@@ -758,6 +760,23 @@ function reducer(s: State, a: Action): State {
       };
       break;
     }
+    case "AJUSTAR_BASE_MAQ": {
+      const ajustar = (t: Turno): Turno => ({
+        ...t,
+        editado: true,
+        caixa: {
+          ...t.caixa,
+          maq1: a.bases.maq1 != null ? { ...t.caixa.maq1, base: a.bases.maq1 } : t.caixa.maq1,
+          maq2: a.bases.maq2 != null ? { ...t.caixa.maq2, base: a.bases.maq2 } : t.caixa.maq2,
+        },
+      });
+      n = {
+        ...s,
+        turnoAtivo: s.turnoAtivo?.id === a.id ? ajustar(s.turnoAtivo) : s.turnoAtivo,
+        historico: s.historico.map((t) => (t.id === a.id ? ajustar(t) : t)),
+      };
+      break;
+    }
     case "ADD_FUNC":
       n = { ...s, funcionarios: [...s.funcionarios, a.f] }; break;
     case "REMOVE_FUNC":
@@ -1067,6 +1086,22 @@ function previousMaqBases(s: State, shift: ShiftKey, date: string): { maq1: numb
     maq1: savedFrom(t.caixa.maq1, wasNoite),
     maq2: t.caixa.maq2Ativa ? savedFrom(t.caixa.maq2, wasNoite) : 0,
   };
+}
+
+// Valor da maquininha que o PRÓXIMO turno herda como base: o valor exibido (dia) ou o "após 00:00"
+// (noite, porque a maquininha zera à meia-noite). Maquininha 2 desligada passa 0.
+export function baseHerdadaMaq(t: Turno, which: "maq1" | "maq2"): number {
+  if (which === "maq2" && !t.caixa.maq2Ativa) return 0;
+  const m = t.caixa[which];
+  return t.shift === "noite" ? (m.apos00 ?? 0) : (m.display ?? 0);
+}
+
+// Turno logo depois deste (próximo período com turno lançado: fechado ou em andamento)
+export function turnoSeguinte(s: State, t: Turno): Turno | undefined {
+  const alvo = chavePeriodo(t);
+  return [...s.historico, ...(s.turnoAtivo ? [s.turnoAtivo] : [])]
+    .filter((x) => x.id !== t.id && chavePeriodo(x) > alvo)
+    .sort((a, b) => chavePeriodo(a).localeCompare(chavePeriodo(b)))[0];
 }
 
 // --------- Selectors / calculations ---------
@@ -1940,6 +1975,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       histPendentesRef.current.add(antes.turnoAtivo.id);
     } else if (a.type === "EDIT_HIST") {
       histPendentesRef.current.add(a.id);
+    } else if (a.type === "AJUSTAR_BASE_MAQ") {
+      if (antes.turnoAtivo?.id === a.id) turnoSujoRef.current = true;
+      else histPendentesRef.current.add(a.id);
     } else if (a.type === "DISCARD_SHIFT") {
       if (!antes.turnoAtivo) return;
       cancelarSincronizacaoTurno();
