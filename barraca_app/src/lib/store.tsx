@@ -65,6 +65,9 @@ export interface Funcionario {
   taxaHora: number; // R$/hora
   role: "employee" | "owner"; // "owner" = administrador, também acessa o Painel
   ativo?: boolean; // false = desativado: não entra no app e não aparece nas listas de trabalho (histórico é mantido)
+  // true = excluído pelo dono: some de todas as listas (inclusive Equipe) e não entra no app. O registro
+  // continua no banco só para o histórico (turnos, pontos, folha) seguir mostrando o nome certo.
+  excluido?: boolean;
   // Overrides pessoais (se ausentes, usa os valores padrão gerais em configGeral)
   transporteIda?: number;
   transporteVolta?: number;
@@ -223,6 +226,8 @@ type Action =
   | { type: "DELETE_TURNO"; id: string }
   | { type: "EDIT_HIST"; id: string; turno: Turno }
   | { type: "EDIT_ATIVO"; turno: Turno }
+  // Dono: corrige só o "valor do turno anterior" (base) das maquininhas de um turno (sem mexer no estoque)
+  | { type: "AJUSTAR_BASE_MAQ"; id: string; bases: { maq1?: number; maq2?: number } }
   | { type: "ADD_FUNC"; f: Funcionario }
   | { type: "REMOVE_FUNC"; id: string }
   | { type: "UPDATE_FUNC"; id: string; patch: Partial<Funcionario> }
@@ -278,6 +283,7 @@ function funcionarioFromRow(row: any): Funcionario {
     taxaHora: row.taxa_hora,
     role: row.role === "owner" ? "owner" : "employee",
     ativo: row.ativo !== false,
+    excluido: row.excluido === true,
     transporteIda: row.transporte_ida ?? undefined,
     transporteVolta: row.transporte_volta ?? undefined,
     refeicao: row.refeicao ?? undefined,
@@ -319,6 +325,7 @@ async function sincronizarFuncionario(a: Action) {
       if ("taxaHora" in a.patch) patch.taxa_hora = a.patch.taxaHora;
       if ("role" in a.patch) patch.role = a.patch.role;
       if ("ativo" in a.patch) patch.ativo = a.patch.ativo !== false;
+      if ("excluido" in a.patch) patch.excluido = a.patch.excluido === true;
       if ("transporteIda" in a.patch) patch.transporte_ida = a.patch.transporteIda ?? null;
       if ("transporteVolta" in a.patch) patch.transporte_volta = a.patch.transporteVolta ?? null;
       if ("refeicao" in a.patch) patch.refeicao = a.patch.refeicao ?? null;
@@ -334,6 +341,10 @@ async function sincronizarFuncionario(a: Action) {
       if (error) throw error;
     }
   } catch (e) {
+    if (a.type === "UPDATE_FUNC" && "excluido" in a.patch && String((e as any)?.message ?? "").includes("excluido")) {
+      alert("Para excluir funcionários o banco precisa da coluna 'excluido'. Rode o arquivo excluir_funcionario.sql no SQL Editor do Supabase e exclua de novo (até lá a exclusão vale só neste aparelho).");
+      return;
+    }
     if (a.type === "UPDATE_FUNC" && "ativo" in a.patch && String((e as any)?.message ?? "").includes("ativo")) {
       alert("Para ativar/desativar funcionários o banco precisa da coluna 'ativo'. Rode o arquivo adicionar_ativo.sql no SQL Editor do Supabase (até lá a mudança vale só neste aparelho).");
     }
@@ -749,6 +760,23 @@ function reducer(s: State, a: Action): State {
       };
       break;
     }
+    case "AJUSTAR_BASE_MAQ": {
+      const ajustar = (t: Turno): Turno => ({
+        ...t,
+        editado: true,
+        caixa: {
+          ...t.caixa,
+          maq1: a.bases.maq1 != null ? { ...t.caixa.maq1, base: a.bases.maq1 } : t.caixa.maq1,
+          maq2: a.bases.maq2 != null ? { ...t.caixa.maq2, base: a.bases.maq2 } : t.caixa.maq2,
+        },
+      });
+      n = {
+        ...s,
+        turnoAtivo: s.turnoAtivo?.id === a.id ? ajustar(s.turnoAtivo) : s.turnoAtivo,
+        historico: s.historico.map((t) => (t.id === a.id ? ajustar(t) : t)),
+      };
+      break;
+    }
     case "ADD_FUNC":
       n = { ...s, funcionarios: [...s.funcionarios, a.f] }; break;
     case "REMOVE_FUNC":
@@ -1058,6 +1086,22 @@ function previousMaqBases(s: State, shift: ShiftKey, date: string): { maq1: numb
     maq1: savedFrom(t.caixa.maq1, wasNoite),
     maq2: t.caixa.maq2Ativa ? savedFrom(t.caixa.maq2, wasNoite) : 0,
   };
+}
+
+// Valor da maquininha que o PRÓXIMO turno herda como base: o valor exibido (dia) ou o "após 00:00"
+// (noite, porque a maquininha zera à meia-noite). Maquininha 2 desligada passa 0.
+export function baseHerdadaMaq(t: Turno, which: "maq1" | "maq2"): number {
+  if (which === "maq2" && !t.caixa.maq2Ativa) return 0;
+  const m = t.caixa[which];
+  return t.shift === "noite" ? (m.apos00 ?? 0) : (m.display ?? 0);
+}
+
+// Turno logo depois deste (próximo período com turno lançado: fechado ou em andamento)
+export function turnoSeguinte(s: State, t: Turno): Turno | undefined {
+  const alvo = chavePeriodo(t);
+  return [...s.historico, ...(s.turnoAtivo ? [s.turnoAtivo] : [])]
+    .filter((x) => x.id !== t.id && chavePeriodo(x) > alvo)
+    .sort((a, b) => chavePeriodo(a).localeCompare(chavePeriodo(b)))[0];
 }
 
 // --------- Selectors / calculations ---------
@@ -1696,7 +1740,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       let { data, error } = await supabase.from("funcionarios").select("*").order("created_at");
       if (error?.code === "42501") {
         // Depois do seguranca_login.sql a coluna de senha não pode ser lida: busca as demais
-        ({ data, error } = await supabase.from("funcionarios").select(COLUNAS_FUNCIONARIO).order("created_at"));
+        ({ data, error } = await supabase.from("funcionarios").select(`${COLUNAS_FUNCIONARIO},excluido`).order("created_at"));
+        // Banco ainda sem a coluna "excluido" (excluir_funcionario.sql não rodado)
+        if (error && error.code !== "42501" && /excluido/.test(String(error.message ?? ""))) {
+          ({ data, error } = await supabase.from("funcionarios").select(COLUNAS_FUNCIONARIO).order("created_at"));
+        }
       }
       if (error) {
         // eslint-disable-next-line no-console
@@ -1927,6 +1975,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       histPendentesRef.current.add(antes.turnoAtivo.id);
     } else if (a.type === "EDIT_HIST") {
       histPendentesRef.current.add(a.id);
+    } else if (a.type === "AJUSTAR_BASE_MAQ") {
+      if (antes.turnoAtivo?.id === a.id) turnoSujoRef.current = true;
+      else histPendentesRef.current.add(a.id);
     } else if (a.type === "DISCARD_SHIFT") {
       if (!antes.turnoAtivo) return;
       cancelarSincronizacaoTurno();

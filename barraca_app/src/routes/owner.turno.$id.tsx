@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import {
   useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina, maqAbaixoDaBase, valorComparadoMaq,
+  turnoSeguinte, baseHerdadaMaq,
   type Turno, type ShiftItem,
 } from "@/lib/store";
 import { BRL, formatDateBR, shiftLabel } from "@/lib/format";
@@ -57,15 +58,30 @@ function EditTurno() {
   const save = () => {
     const abaixo = (local.caixa.maq2Ativa ? (["maq1", "maq2"] as const) : (["maq1"] as const))
       .filter((m) => maqAbaixoDaBase(local.caixa[m], local.shift));
-    if (abaixo.length > 0) {
-      alert(`O valor da maquininha só pode ser IGUAL OU MAIOR que o do turno anterior:\n\n` +
-        abaixo.map((m) => `• ${nomeMaquina(state.taxasMaquininha, m)}: ${BRL(valorComparadoMaq(local.caixa[m], local.shift))} (turno anterior ${BRL(local.caixa[m].base)})`).join("\n"));
+    // Para o funcionário essa regra trava; o dono (correção) pode confirmar e salvar assim mesmo
+    if (abaixo.length > 0 && !confirm(`O valor da maquininha está MENOR que o do turno anterior:\n\n` +
+      abaixo.map((m) => `• ${nomeMaquina(state.taxasMaquininha, m)}: ${BRL(valorComparadoMaq(local.caixa[m], local.shift))} (turno anterior ${BRL(local.caixa[m].base)})`).join("\n") +
+      `\n\nSalvar mesmo assim?`)) {
       return;
     }
     if (isAtivo) {
       dispatch({ type: "EDIT_ATIVO", turno: local });
     } else {
       dispatch({ type: "EDIT_HIST", id: local.id, turno: local });
+    }
+    // O turno seguinte herdou o valor final das maquininhas como "valor do turno anterior": se ele mudou,
+    // oferece corrigir lá também (senão o erro continuaria passando de turno em turno)
+    const prox = turnoSeguinte(state, local);
+    if (prox) {
+      const mudancas = (["maq1", "maq2"] as const)
+        .map((m) => ({ m, de: prox.caixa[m].base ?? 0, para: baseHerdadaMaq(local, m) }))
+        .filter((x) => (x.m === "maq1" || prox.caixa.maq2Ativa) && Math.abs(x.de - x.para) > 0.004);
+      if (mudancas.length > 0 && confirm(
+        `O turno seguinte (${formatDateBR(prox.date)} · ${shiftLabel(prox.shift)}) usou estes valores como "valor do turno anterior":\n\n` +
+        mudancas.map((x) => `• ${nomeMaquina(state.taxasMaquininha, x.m)}: ${BRL(x.de)} → ${BRL(x.para)}`).join("\n") +
+        `\n\nAtualizar lá também?`)) {
+        dispatch({ type: "AJUSTAR_BASE_MAQ", id: prox.id, bases: Object.fromEntries(mudancas.map((x) => [x.m, x.para])) });
+      }
     }
     alert("Turno atualizado!");
     nav({ to: "/owner/historico" });
@@ -183,7 +199,8 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
   // Maquininha nunca menor que o turno anterior (base): avisa ao terminar de digitar
   const conferir = (which: "maq1" | "maq2") => (n: number) => {
     const base = c[which].base ?? 0;
-    if (n < base) alert(`O valor da ${nomeMaquina(state.taxasMaquininha, which)} só pode ser IGUAL OU MAIOR que o valor do turno anterior (${BRL(base)}).`);
+    if (n < base) alert(`Atenção: o valor da ${nomeMaquina(state.taxasMaquininha, which)} está MENOR que o valor do turno anterior (${BRL(base)}).\n\n` +
+      `Se o valor do turno anterior estiver errado, corrija o campo "Valor do turno anterior (base)" logo acima.`);
   };
 
   return (
@@ -216,7 +233,7 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
 
       <div className="bg-card border border-border rounded-xl p-3 space-y-2">
         <div className="text-sm font-medium">{nomeMaquina(state.taxasMaquininha, "maq1")}</div>
-        <div className="text-xs text-muted-foreground">Base: <span className="mono">{BRL(c.maq1.base)}</span></div>
+        {money("Valor do turno anterior (base)", c.maq1.base, (n) => updMaq("maq1", { base: n }))}
         {!isNoite ? money("Valor exibido", c.maq1.display, (n) => updMaq("maq1", { display: n }), conferir("maq1")) :
           <div className="grid grid-cols-2 gap-2">
             {money("Até 00:00", c.maq1.ate00 ?? 0, (n) => updMaq("maq1", { ate00: n, display: n }), conferir("maq1"))}
@@ -231,6 +248,7 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
         </label>
         {c.maq2Ativa && (
           <>
+            {money("Valor do turno anterior (base)", c.maq2.base, (n) => updMaq("maq2", { base: n }))}
             {!isNoite ? money("Valor exibido", c.maq2.display, (n) => updMaq("maq2", { display: n }), conferir("maq2")) :
               <div className="grid grid-cols-2 gap-2">
                 {money("Até 00:00", c.maq2.ate00 ?? 0, (n) => updMaq("maq2", { ate00: n, display: n }), conferir("maq2"))}

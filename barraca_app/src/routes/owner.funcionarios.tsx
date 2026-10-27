@@ -62,6 +62,7 @@ function Funcionarios() {
     dispatch({ type: "UPDATE_FUNC", id: f.id, patch: { ativo: inativo } });
   };
 
+  const cadastrados = state.funcionarios.filter((f) => !f.excluido);
   const cg = state.configGeral;
 
   return (
@@ -135,8 +136,9 @@ function Funcionarios() {
         <div>
           <h2 className="text-sm font-semibold mb-2">Cadastrados</h2>
           <div className="space-y-2">
-            {state.funcionarios.length === 0 && <div className="text-sm text-muted-foreground">Nenhum ainda.</div>}
-            {[...state.funcionarios].sort((x, y) => Number(x.ativo === false) - Number(y.ativo === false)).map((f) => {
+            {/* Excluídos não aparecem (só ficam no banco para o histórico); desativados aparecem por último */}
+            {cadastrados.length === 0 && <div className="text-sm text-muted-foreground">Nenhum ainda.</div>}
+            {[...cadastrados].sort((x, y) => Number(x.ativo === false) - Number(y.ativo === false)).map((f) => {
               const inativo = f.ativo === false;
               return (
                 <div
@@ -393,9 +395,13 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
 
   const upd = (patch: Partial<Funcionario>) => dispatch({ type: "UPDATE_FUNC", id: f.id, patch });
 
-  const remover = () => {
-    if (confirm(`Remover ${f.nome}?`)) {
-      dispatch({ type: "REMOVE_FUNC", id: f.id });
+  // Excluir: some de todas as listas e não entra mais no app. Não apaga do banco — os turnos, pontos e a
+  // folha antigos continuam com o nome certo (e o banco não deixa apagar quem tem histórico).
+  const excluir = () => {
+    if (state.currentUser?.username === f.username) { alert("Você não pode excluir o seu próprio acesso."); return; }
+    if (confirm(`Excluir ${f.nome}?\n\n${f.nome} sai da lista de cadastrados e não consegue mais entrar no app.\n` +
+      `O histórico (turnos, ponto, consumo e folha) é mantido.\n\nSe for só temporário, use "Desativar" em vez de excluir.`)) {
+      dispatch({ type: "UPDATE_FUNC", id: f.id, patch: { excluido: true, ativo: false } });
       onOpenChange(false);
     }
   };
@@ -506,8 +512,8 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
             </div>
           </div>
 
-          <Button variant="secondary" onClick={remover} className="w-full text-destructive">
-            <Trash2 className="w-4 h-4 mr-1.5" /> Remover funcionário
+          <Button variant="secondary" onClick={excluir} className="w-full text-destructive">
+            <Trash2 className="w-4 h-4 mr-1.5" /> Excluir funcionário
           </Button>
         </div>
       </DialogContent>
