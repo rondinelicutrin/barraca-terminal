@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 // Versão do app (package.json), mostrada na tela de login para conferir qual versão está no ar
 const versao = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
 
-// Publicação na Cloudflare: nome fixo do site. Sem isso o nome vinha da pasta (barraca_v31, v32...) e
+// Publicação na Cloudflare: nome fixo do site. Sem isso o nome vinha da pasta do projeto e
 // cada versão viraria um site novo, com outro endereço. ("wrangler" é repassado ao nitro, que o aceita,
 // embora o tipo do @lovable.dev/vite-tanstack-config não o declare — por isso vai numa variável.)
 const cloudflare = { deployConfig: true, nodeCompat: true, wrangler: { name: "barraca-terminal" } };
