@@ -308,7 +308,7 @@ function TransferirConsumoDialog({ alvo, onClose, nomeItem, nomeFunc }: {
   const ponto = alvo ? state.pontos.find((p) => p.id === alvo.ponto.id) ?? null : null;
   const item = ponto?.consumo.find((c) => c.productId === alvo?.productId);
   const max = item?.qty ?? 0;
-  const destinos = state.funcionarios.filter((f) => f.username !== ponto?.employeeUsername);
+  const destinos = state.funcionarios.filter((f) => !f.excluido && f.username !== ponto?.employeeUsername);
 
   const abrir = (aberto: boolean) => { if (!aberto) { onClose(); setPara(""); setQtd(0); } };
   const quantidade = qtd > 0 ? qtd : max;

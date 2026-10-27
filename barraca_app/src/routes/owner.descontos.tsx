@@ -69,7 +69,7 @@ function DescontosPage() {
     gerarRelatorioPdf({
       filename: "descontos-por-funcionario.pdf",
       title: "Desconto de consumo por funcionário",
-      sections: state.funcionarios.map((func) => ({
+      sections: state.funcionarios.filter((func) => !func.excluido).map((func) => ({
         heading: func.nome,
         columns: ["Produto", "Desconto", "Limite"],
         rows: linhas.filter((l) => l.funcionario === func.nome).map((l) => [l.produto, `${l.percentual}%`, l.limite]),
@@ -108,7 +108,7 @@ function DescontosPage() {
             className="mt-1 w-full h-10 rounded-md bg-input border border-border px-3 text-sm"
           >
             {state.funcionarios.length === 0 && <option value="">Nenhum funcionário cadastrado</option>}
-            {state.funcionarios.map((func) => (
+            {state.funcionarios.filter((func) => !func.excluido).map((func) => (
               <option key={func.username} value={func.username}>{func.nome}</option>
             ))}
           </select>

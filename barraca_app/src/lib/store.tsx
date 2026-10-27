@@ -65,6 +65,9 @@ export interface Funcionario {
   taxaHora: number; // R$/hora
   role: "employee" | "owner"; // "owner" = administrador, também acessa o Painel
   ativo?: boolean; // false = desativado: não entra no app e não aparece nas listas de trabalho (histórico é mantido)
+  // true = excluído pelo dono: some de todas as listas (inclusive Equipe) e não entra no app. O registro
+  // continua no banco só para o histórico (turnos, pontos, folha) seguir mostrando o nome certo.
+  excluido?: boolean;
   // Overrides pessoais (se ausentes, usa os valores padrão gerais em configGeral)
   transporteIda?: number;
   transporteVolta?: number;
@@ -278,6 +281,7 @@ function funcionarioFromRow(row: any): Funcionario {
     taxaHora: row.taxa_hora,
     role: row.role === "owner" ? "owner" : "employee",
     ativo: row.ativo !== false,
+    excluido: row.excluido === true,
     transporteIda: row.transporte_ida ?? undefined,
     transporteVolta: row.transporte_volta ?? undefined,
     refeicao: row.refeicao ?? undefined,
@@ -319,6 +323,7 @@ async function sincronizarFuncionario(a: Action) {
       if ("taxaHora" in a.patch) patch.taxa_hora = a.patch.taxaHora;
       if ("role" in a.patch) patch.role = a.patch.role;
       if ("ativo" in a.patch) patch.ativo = a.patch.ativo !== false;
+      if ("excluido" in a.patch) patch.excluido = a.patch.excluido === true;
       if ("transporteIda" in a.patch) patch.transporte_ida = a.patch.transporteIda ?? null;
       if ("transporteVolta" in a.patch) patch.transporte_volta = a.patch.transporteVolta ?? null;
       if ("refeicao" in a.patch) patch.refeicao = a.patch.refeicao ?? null;
@@ -334,6 +339,10 @@ async function sincronizarFuncionario(a: Action) {
       if (error) throw error;
     }
   } catch (e) {
+    if (a.type === "UPDATE_FUNC" && "excluido" in a.patch && String((e as any)?.message ?? "").includes("excluido")) {
+      alert("Para excluir funcionários o banco precisa da coluna 'excluido'. Rode o arquivo excluir_funcionario.sql no SQL Editor do Supabase e exclua de novo (até lá a exclusão vale só neste aparelho).");
+      return;
+    }
     if (a.type === "UPDATE_FUNC" && "ativo" in a.patch && String((e as any)?.message ?? "").includes("ativo")) {
       alert("Para ativar/desativar funcionários o banco precisa da coluna 'ativo'. Rode o arquivo adicionar_ativo.sql no SQL Editor do Supabase (até lá a mudança vale só neste aparelho).");
     }
@@ -1696,7 +1705,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       let { data, error } = await supabase.from("funcionarios").select("*").order("created_at");
       if (error?.code === "42501") {
         // Depois do seguranca_login.sql a coluna de senha não pode ser lida: busca as demais
-        ({ data, error } = await supabase.from("funcionarios").select(COLUNAS_FUNCIONARIO).order("created_at"));
+        ({ data, error } = await supabase.from("funcionarios").select(`${COLUNAS_FUNCIONARIO},excluido`).order("created_at"));
+        // Banco ainda sem a coluna "excluido" (excluir_funcionario.sql não rodado)
+        if (error && error.code !== "42501" && /excluido/.test(String(error.message ?? ""))) {
+          ({ data, error } = await supabase.from("funcionarios").select(COLUNAS_FUNCIONARIO).order("created_at"));
+        }
       }
       if (error) {
         // eslint-disable-next-line no-console
