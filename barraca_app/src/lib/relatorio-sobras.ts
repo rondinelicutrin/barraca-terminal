@@ -1,4 +1,4 @@
-import { esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina, type Turno, type Funcionario, type TaxasMaquininha } from "./store";
+import { vendeu, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina, type Turno, type Funcionario, type TaxasMaquininha } from "./store";
 import { EXCLUIR_DO_TOTAL_PASTEL, type Category, type Product } from "./products";
 import { BRL, formatDateBR, shiftLabel } from "./format";
 import { gerarRelatorioPdf, type PdfSection } from "./pdf";
@@ -25,6 +25,8 @@ export interface MaquininhaRelatorio {
   real: number;                // vendido nela neste turno
 }
 
+export interface VendidoRelatorio { item: string; qtd: string }
+
 export interface ConsumoRelatorio { produto: string; funcionarios: number; barraca: number; descarte: number }
 
 export interface RelatorioSobras {
@@ -38,11 +40,48 @@ export interface RelatorioSobras {
   caixa: [string, number][];
   maquininhas: MaquininhaRelatorio[];
   consumo: ConsumoRelatorio[];
+  vendidos: VendidoRelatorio[]; // resumo: total vendido = entrada + chegada − sobra − consumo − descarte
   esperado: number;
   arrecadado: number;
   diferenca: number;   // arrecadado − esperado
   situacao: string;    // Caixa conferido / Sobra / Falta
   arquivoBase: string; // nome do arquivo, sem extensão
+}
+
+// Linhas fixas do resumo "Vendidos no turno" (na ordem pedida pelo dono)
+const NAO_REFRIGERANTE = new Set(["bb_agua", "bb_aguagas", "bb_cerveja", "ot_gelo"]);
+const LINHAS_VENDIDOS: { item: string; filtro: (p: Product) => boolean }[] = [
+  { item: "Casquinha frita", filtro: (p) => p.id === "cq_frita" },
+  { item: "Caldo 300", filtro: (p) => p.id === "cc_300" },
+  { item: "Caldo 400", filtro: (p) => p.id === "cc_400" },
+  { item: "Caldo 500", filtro: (p) => p.id === "cc_500" },
+  { item: "Garrafa 500", filtro: (p) => p.id === "cc_g500" },
+  { item: "Garrafa 1L", filtro: (p) => p.id === "cc_g1000" },
+  { item: "Refrigerantes", filtro: (p) => p.category === "bebida" && !NAO_REFRIGERANTE.has(p.id) },
+  { item: "Água", filtro: (p) => p.id === "bb_agua" },
+  { item: "Água com gás", filtro: (p) => p.id === "bb_aguagas" },
+  { item: "Cerveja", filtro: (p) => p.id === "bb_cerveja" },
+  { item: "Gelo", filtro: (p) => p.id === "ot_gelo" },
+];
+
+// Total vendido no turno por linha do resumo. O consumo (funcionários e barraca) e o descarte são
+// descontados: saíram do estoque mas não foram vendidos.
+export function vendidosDoTurno(turno: Turno, products: Product[]): VendidoRelatorio[] {
+  const soma = (lista: Product[]) => lista.reduce((s, p) => s + (turno.items[p.id] ? (vendeu(turno.items[p.id]) ?? 0) : 0), 0);
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toLocaleString("pt-BR"));
+  const usados = new Set<string>();
+  const pasteis = products.filter((p) => p.category === "pastel" && !EXCLUIR_DO_TOTAL_PASTEL.has(p.id));
+  pasteis.forEach((p) => usados.add(p.id));
+  const linhas: VendidoRelatorio[] = [{ item: `Pastéis do turno (${shiftLabel(turno.shift).replace(/^[^\p{L}]+/u, "")})`, qtd: fmt(soma(pasteis)) }];
+  for (const l of LINHAS_VENDIDOS) {
+    const lista = products.filter(l.filtro);
+    lista.forEach((p) => usados.add(p.id));
+    linhas.push({ item: l.item, qtd: fmt(soma(lista)) });
+  }
+  // Produtos cadastrados pelo dono que não entram em nenhuma linha acima (só aparece se vendeu algo)
+  const outros = soma(products.filter((p) => !usados.has(p.id) && p.saleable));
+  if (outros > 0) linhas.push({ item: "Outros produtos", qtd: fmt(outros) });
+  return linhas;
 }
 
 const fmtQtd = (n: number, decimal?: boolean) => (decimal ? n.toLocaleString("pt-BR") : String(n));
@@ -111,7 +150,7 @@ export function montarRelatorioSobras(
     abertoPor: nome(turno.employee),
     fechadoPor: nome(turno.fechadoPor ?? turno.employee),
     colegas: (turno.outrosFuncionarios ?? []).map(nome),
-    grupos, caixa, maquininhas, consumo, esperado, arrecadado, diferenca, situacao,
+    grupos, caixa, maquininhas, consumo, vendidos: vendidosDoTurno(turno, products), esperado, arrecadado, diferenca, situacao,
     arquivoBase: `sobras-${turno.date}-${turno.shift}`,
   };
 }
@@ -126,6 +165,11 @@ export function baixarRelatorioSobrasPdf(r: RelatorioSobras) {
       columns: ["Item", "Valor"],
       rows: [["Esperado", BRL(r.esperado)], ["Arrecadado", BRL(r.arrecadado)], ["Diferença", sinal(r.diferenca)]],
       totalRow: ["Situação", r.situacao],
+    },
+    {
+      heading: "Vendidos no turno (entrada + chegada − sobra, sem consumo e descarte)",
+      columns: ["Item", "Vendido"],
+      rows: r.vendidos.map((x) => [x.item, x.qtd]),
     },
     {
       heading: "Dinheiro, moedas e pix",
@@ -182,6 +226,9 @@ export function baixarRelatorioSobrasCsv(r: RelatorioSobras) {
     ["Arrecadado (R$)", v(r.arrecadado)],
     ["Diferença (R$)", v(r.diferenca)],
     ["Situação", s(r.situacao)],
+    [],
+    ["VENDIDOS NO TURNO", "Quantidade"],
+    ...r.vendidos.map((x) => [s(x.item), x.qtd]),
     [],
     ["DINHEIRO, MOEDAS E PIX", "Valor (R$)"],
     ...r.caixa.map(([k, x]) => [k, v(x)]),

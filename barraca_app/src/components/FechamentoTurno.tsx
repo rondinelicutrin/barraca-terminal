@@ -211,6 +211,14 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
         </div>
 
         <div className="bg-card border border-border rounded-xl p-3">
+          <div className="text-sm font-medium">🧾 Vendidos no turno</div>
+          <div className="text-[10px] text-muted-foreground mb-1">entrada + chegada − sobra (consumo e descarte já descontados)</div>
+          {rel.vendidos.map((x) => (
+            <Row key={x.item} label={x.item} value={x.qtd} />
+          ))}
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-3">
           <div className="text-sm font-medium mb-2">🥟 Sobras de pastéis neste fechamento</div>
           {linhas.length === 0 ? (
             <div className="text-xs text-muted-foreground">Nenhuma sobra de pastel registrada.</div>
