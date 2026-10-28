@@ -15,6 +15,7 @@ import { baixarCsv } from "@/lib/csv";
 import { Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useFiltro } from "@/lib/filtros";
+import { supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/owner/funcionarios")({
   component: Funcionarios,
@@ -39,6 +40,9 @@ function Funcionarios() {
   const [showFolha, setShowFolha] = useState(false);
   const [showRelatorio, setShowRelatorio] = useState(false);
   const [editando, setEditando] = useState<string | null>(null);
+  // Senhas reveladas (só nesta tela, até sair dela). null = cadastrada antes do ver_senhas.sql
+  const [senhas, setSenhas] = useState<Record<string, string | null> | null>(null);
+  const [pedindoSenha, setPedindoSenha] = useState(false);
 
   const add = () => {
     // Usuário sem espaços e em minúsculas: "Ana " e "ana" eram aceitos como pessoas diferentes
@@ -134,7 +138,13 @@ function Funcionarios() {
         </div>
 
         <div>
-          <h2 className="text-sm font-semibold mb-2">Cadastrados</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold">Cadastrados</h2>
+            <button type="button" className="text-xs text-primary"
+              onClick={() => (senhas ? setSenhas(null) : setPedindoSenha(true))}>
+              {senhas ? "🙈 Ocultar senhas" : "👁 Ver senhas"}
+            </button>
+          </div>
           <div className="space-y-2">
             {/* Excluídos não aparecem (só ficam no banco para o histórico); desativados aparecem por último */}
             {cadastrados.length === 0 && <div className="text-sm text-muted-foreground">Nenhum ainda.</div>}
@@ -152,6 +162,14 @@ function Funcionarios() {
                       {inativo && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/20 text-destructive">Desativado</span>}
                     </div>
                     <div className="text-xs text-muted-foreground mono">@{f.username} · {BRL(f.taxaHora)}/h · Editar ›</div>
+                    {senhas && (
+                      <div className="text-xs mono mt-0.5">
+                        Senha:{" "}
+                        {senhas[normalizarUsuario(f.username)] != null
+                          ? <span className="text-foreground font-semibold">{senhas[normalizarUsuario(f.username)]}</span>
+                          : <span className="text-muted-foreground">não disponível (cadastrada antes) — troque a senha para ver</span>}
+                      </div>
+                    )}
                   </button>
                   <button
                     onClick={() => alternarAtivo(f)}
@@ -170,7 +188,9 @@ function Funcionarios() {
       <EditFuncionarioDialog
         funcionarioId={editando}
         onOpenChange={(v) => { if (!v) setEditando(null); }}
+        onSenhaTrocada={(username, senha) => setSenhas((m) => (m ? { ...m, [normalizarUsuario(username)]: senha } : m))}
       />
+      <ConfirmarSenhaDialog open={pedindoSenha} onOpenChange={setPedindoSenha} onSenhas={setSenhas} />
       <BottomNav />
     </Shell>
   );
@@ -376,7 +396,113 @@ function EditarPontoDialog({ dia, nome, onClose }: { dia: DiaTrabalhado | null; 
 
 // Diálogo de edição de um funcionário: valores pessoais de transporte/refeição, taxa por hora,
 // diária, desconto, adicional — e o valor a receber (com dias e consumo detalhados) no período.
-function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId: string | null; onOpenChange: (v: boolean) => void }) {
+// Ver senhas: só o dono ou um administrador, confirmando a própria senha. Quem confere é o banco
+// (função ver_senhas do ver_senhas.sql); o app nunca consegue ler as senhas sozinho.
+function ConfirmarSenhaDialog({ open, onOpenChange, onSenhas }: {
+  open: boolean; onOpenChange: (v: boolean) => void; onSenhas: (m: Record<string, string | null>) => void;
+}) {
+  const { state } = useStore();
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [carregando, setCarregando] = useState(false);
+  const me = state.currentUser;
+  const fechar = () => { setSenha(""); setErro(""); onOpenChange(false); };
+  const confirmar = async () => {
+    if (!me || me.role !== "owner") { setErro("Somente o dono ou um administrador pode ver as senhas."); return; }
+    if (!senha) { setErro("Digite a sua senha."); return; }
+    setCarregando(true);
+    const { data, error } = await supabase.rpc("ver_senhas", { p_usuario: me.username, p_senha: senha });
+    setCarregando(false);
+    if (error) {
+      if (error.code === "PGRST202" || /ver_senhas/.test(String(error.message ?? ""))) {
+        // Banco antigo (antes do seguranca_login.sql) ainda entrega as senhas para o app
+        const antigas = state.funcionarios.filter((f) => f.password);
+        if (antigas.length > 0) {
+          onSenhas(Object.fromEntries(state.funcionarios.map((f) => [normalizarUsuario(f.username), f.password ?? null])));
+          fechar();
+          return;
+        }
+        setErro("Para ver as senhas, rode o arquivo ver_senhas.sql no Supabase (SQL Editor).");
+      } else if (error.code === "42501") {
+        setErro("Senha incorreta.");
+      } else {
+        setErro("Não foi possível consultar agora (sem internet?). Tente de novo.");
+      }
+      return;
+    }
+    const lista = (data ?? []) as { username: string; senha: string | null }[];
+    onSenhas(Object.fromEntries(lista.map((x) => [normalizarUsuario(x.username), x.senha])));
+    fechar();
+  };
+  return (
+    <Dialog open={open} onOpenChange={(v) => (v ? onOpenChange(true) : fechar())}>
+      <DialogContent className="max-w-[380px]">
+        <DialogHeader><DialogTitle>Ver senhas dos funcionários</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Por segurança, confirme a <b>sua</b> senha ({me?.username === "dono" ? "senha do dono" : `usuário @${me?.username}`}).
+          </p>
+          <Input type="password" placeholder="Sua senha" value={senha} autoFocus
+            onChange={(e) => { setSenha(e.target.value); setErro(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void confirmar(); }} />
+          {erro && <p className="text-xs text-destructive">{erro}</p>}
+          <Button className="w-full" onClick={confirmar} disabled={carregando}>{carregando ? "Conferindo…" : "Ver senhas"}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Nome e senha do funcionário (o usuário de login não muda: é ele que liga os turnos, pontos e a folha)
+function NomeESenha({ f, onSenhaTrocada }: { f: Funcionario; onSenhaTrocada?: (username: string, senha: string) => void }) {
+  const { dispatch } = useStore();
+  const [nome, setNome] = useState(f.nome);
+  const [senha, setSenha] = useState("");
+  useEffect(() => { setNome(f.nome); setSenha(""); }, [f.id, f.nome]);
+  const salvarNome = () => {
+    const n = nome.trim().replace(/\s+/g, " ");
+    if (!n) { alert("Digite o nome."); return; }
+    if (n === f.nome) return;
+    dispatch({ type: "UPDATE_FUNC", id: f.id, patch: { nome: n } });
+    alert(`Nome alterado para "${n}".`);
+  };
+  const trocarSenha = () => {
+    if (senha.length < 3) { alert("A senha precisa ter pelo menos 3 caracteres."); return; }
+    if (/\s/.test(senha)) { alert("A senha não pode ter espaços."); return; }
+    if (!confirm(`Trocar a senha de ${f.nome}?\n\nNova senha: ${senha}\n\nA senha antiga deixa de funcionar.`)) return;
+    dispatch({ type: "UPDATE_FUNC", id: f.id, patch: { password: senha } });
+    onSenhaTrocada?.(f.username, senha);
+    setSenha("");
+    alert(`Senha de ${f.nome} trocada.`);
+  };
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">Nome e senha</h3>
+      <div>
+        <label className="text-[10px] text-muted-foreground uppercase tracking-wide">Nome</label>
+        <div className="mt-0.5 flex gap-2">
+          <Input value={nome} onChange={(e) => setNome(e.target.value)} aria-label="Nome do funcionário" />
+          <Button variant="secondary" onClick={salvarNome} disabled={nome.trim() === f.nome}>Salvar nome</Button>
+        </div>
+      </div>
+      <div>
+        <label className="text-[10px] text-muted-foreground uppercase tracking-wide">Nova senha</label>
+        <div className="mt-0.5 flex gap-2">
+          <Input value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="Digite a nova senha"
+            autoCapitalize="none" autoComplete="off" aria-label="Nova senha" />
+          <Button variant="secondary" onClick={trocarSenha} disabled={!senha}>Trocar senha</Button>
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        O usuário de login (@{f.username}) continua o mesmo. Para ver a senha atual, use 👁 Ver senhas na lista.
+      </p>
+    </div>
+  );
+}
+
+function EditFuncionarioDialog({ funcionarioId, onOpenChange, onSenhaTrocada }: {
+  funcionarioId: string | null; onOpenChange: (v: boolean) => void; onSenhaTrocada?: (username: string, senha: string) => void;
+}) {
   const { state, dispatch } = useStore();
   const f = state.funcionarios.find((x) => x.id === funcionarioId) ?? null;
   const cg = state.configGeral;
@@ -433,6 +559,8 @@ function EditFuncionarioDialog({ funcionarioId, onOpenChange }: { funcionarioId:
         <DialogHeader><DialogTitle>{f.nome}</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <div className="text-xs text-muted-foreground mono">@{f.username}</div>
+
+          <NomeESenha f={f} onSenhaTrocada={onSenhaTrocada} />
 
           <div className="space-y-2">
             <h3 className="text-sm font-semibold">Tipo de acesso</h3>
