@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, valoresConsumoPonto, type Ponto } from "@/lib/store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -175,10 +175,17 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
   const valorItem = (pt: Ponto, productId: string) =>
     valoresConsumoPonto(state, pt.employeeUsername, pt.consumo)[productId] ?? 0;
 
+  // Funcionário excluído sai da lista (desativado continua aparecendo)
+  const ativosNaLista = state.funcionarios.filter((f) => !f.excluido);
+  const excluidos = useMemo(() => new Set(state.funcionarios.filter((f) => f.excluido).map((f) => f.username)), [state.funcionarios]);
+  useEffect(() => {
+    if (funcSelecionado && excluidos.has(funcSelecionado)) setFuncSelecionado("");
+  }, [funcSelecionado, excluidos]);
+
   const registros = useMemo(() => state.pontos
-    .filter((p) => p.consumo.length > 0 && p.date >= from && p.date <= to)
+    .filter((p) => p.consumo.length > 0 && p.date >= from && p.date <= to && !excluidos.has(p.employeeUsername))
     .filter((p) => !funcSelecionado || p.employeeUsername === funcSelecionado)
-    .sort((a, b) => b.date.localeCompare(a.date)), [state.pontos, from, to, funcSelecionado]);
+    .sort((a, b) => b.date.localeCompare(a.date)), [state.pontos, from, to, funcSelecionado, excluidos]);
 
   const totalGeral = useMemo(() => registros.reduce(
     (s, p) => s + p.consumo.reduce((s2, c) => s2 + valorItem(p, c.productId), 0), 0,
@@ -233,7 +240,7 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
             className="mt-1 w-full h-10 rounded-md bg-input border border-border px-3 text-sm"
           >
             <option value="">Todos os funcionários</option>
-            {state.funcionarios.map((f) => (
+            {ativosNaLista.map((f) => (
               <option key={f.username} value={f.username}>{f.nome}</option>
             ))}
           </select>
