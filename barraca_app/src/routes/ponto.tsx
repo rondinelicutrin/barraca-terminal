@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno } from "@/components/Shell";
-import { useStore, getAllProducts, valoresConsumoPonto, ehSoConsumo, type Ponto, type Turno } from "@/lib/store";
+import { useStore, usaTurnoEPonto, getAllProducts, valoresConsumoPonto, ehSoConsumo, type Ponto, type Turno } from "@/lib/store";
 import { useFiltro } from "@/lib/filtros";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ function PontoPage() {
   useEffect(() => {
     if (!state.hidratado) return; // espera ler o login salvo (F5 não desloga)
     if (!state.currentUser) nav({ to: "/" });
+    else if (!usaTurnoEPonto(state.currentUser)) nav({ to: "/owner" });
   }, [state.hidratado, state.currentUser, nav]);
 
   // Ao abrir a tela, a data volta a ser a de hoje — mantém alinhado com o menu Turno e evita
