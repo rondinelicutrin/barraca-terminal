@@ -79,10 +79,19 @@ export function registrarExecutor(tipo: string, fn: Executor) {
 
 // Coloca um lançamento na fila e tenta enviar na hora. "cancelar" remove pendências que perderam o
 // sentido (ex.: excluir um turno cancela o envio pendente desse turno).
-export function enviar(tipo: string, dados: unknown, opcoes: { chave?: string; cancelar?: string[] } = {}) {
-  const { chave, cancelar } = opcoes;
+// "mesclar": quando já há um envio esperando com a mesma chave, junta os dois (ex.: produtos alterados
+// do turno) em vez de só substituir.
+export function enviar(
+  tipo: string, dados: unknown,
+  opcoes: { chave?: string; cancelar?: string[]; mesclar?: (anterior: any, novo: any) => unknown } = {},
+) {
+  const { chave, cancelar, mesclar } = opcoes;
   if (cancelar?.length) fila = fila.filter((p) => !p.chave || !cancelar.includes(p.chave));
-  if (chave) fila = fila.filter((p) => p.chave !== chave);
+  if (chave) {
+    const anterior = fila.find((p) => p.chave === chave);
+    if (anterior && mesclar) dados = mesclar(anterior.dados, dados);
+    fila = fila.filter((p) => p.chave !== chave);
+  }
   fila.push({ id: crypto.randomUUID(), tipo, chave, dados, tentativas: 0, criadoEm: Date.now() });
   salvar();
   avisar();

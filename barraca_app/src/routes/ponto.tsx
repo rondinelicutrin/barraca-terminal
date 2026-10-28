@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Shell, TopBar, BottomNav } from "@/components/Shell";
+import { Shell, TopBar, BottomNav, TurnoBloqueado, turnoDeOutroFuncionario } from "@/components/Shell";
 import { useStore, getAllProducts, valoresConsumoPonto, ehSoConsumo, type Ponto, type Turno } from "@/lib/store";
 import { useFiltro } from "@/lib/filtros";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
@@ -98,6 +98,7 @@ function PontoPage() {
 
   // Só depois de todos os hooks: sair antes deles fazia o React quebrar ao recarregar a página (F5)
   if (!me) return null;
+  if (turnoDeOutroFuncionario(state)) return <TurnoBloqueado />;
 
   const hours = hoursBetween(entrada, saida);
 

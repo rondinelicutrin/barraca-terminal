@@ -148,8 +148,16 @@ export function DescarteModal({
     if (items) {
       const it = items[pid];
       const limite = limiteDisponivel(it, "descarte");
+      const nome = products.find((p) => p.id === pid)?.name ?? "o produto";
       if (val > limite) {
-        alert(`Descarte não pode exceder o estoque disponível (${limite}).`);
+        alert(limite === 0 && it && !it.entrada && it.chegada == null
+          ? `Sem estoque de ${nome} no turno. Preencha primeiro a Entrada/Chegada de ${nome} no menu Turno.`
+          : `Descarte não pode exceder o estoque disponível (${limite}).`);
+        return;
+      }
+      // Com a sobra já lançada, o descarte a mais deixaria o "vendido" negativo
+      if (it?.sobra != null && val > limite - it.sobra) {
+        alert(`Descarte de ${nome} maior que o disponível: a sobra lançada é ${it.sobra}. Corrija a sobra no menu Turno antes.`);
         return;
       }
     }

@@ -233,6 +233,7 @@ type Action =
   | { type: "UPDATE_FUNC"; id: string; patch: Partial<Funcionario> }
   | { type: "SET_FUNCIONARIOS"; funcionarios: Funcionario[] }
   | { type: "SET_TURNOS_FROM_DB"; turnoAtivo: Turno | null; historico: Turno[] }
+  | { type: "SET_TURNO_ATIVO_FROM_DB"; turnoAtivo: Turno | null }
   | { type: "SET_PONTOS_FROM_DB"; pontos: Ponto[] }
   | { type: "SET_RETIRADAS_FROM_DB"; retiradas: Retirada[] }
   | { type: "SET_DESCONTOS_FROM_DB"; descontos: Record<string, Record<string, DescontoConfig>> }
@@ -468,7 +469,24 @@ function turnoToRow(t: Turno) {
 // Salva o turno inteiro (caixa + todos os itens) no Supabase. Essa função é a mesma tanto para
 // turno aberto (vai sendo chamada aos poucos, com um pequeno atraso) quanto para turno fechado
 // ou corrigido pelo dono (chamada na hora).
-async function sincronizarTurnoCompleto(t: Turno) {
+// Produtos do turno alterados NESTE aparelho (e quais campos), para enviar só isso. Antes o turno inteiro
+// era regravado a cada mudança: se outra pessoa tinha lançado um descarte ou consumo em outro celular,
+// a próxima digitação aqui apagava o lançamento dela. "todos" = enviar todos os produtos (abertura,
+// correção do dono).
+export type ItensAlterados = "todos" | Record<string, string[]>;
+
+export function unirItensAlterados(a: ItensAlterados, b: ItensAlterados): ItensAlterados {
+  if (a === "todos" || b === "todos") return "todos";
+  const out: Record<string, string[]> = { ...a };
+  for (const [pid, campos] of Object.entries(b)) out[pid] = Array.from(new Set([...(out[pid] ?? []), ...campos]));
+  return out;
+}
+
+const COLUNA_ITEM: Record<string, string> = {
+  entrada: "entrada", chegada: "chegada", sobra: "sobra", consumo: "consumo", consumoEst: "consumo_est", descarte: "descarte",
+};
+
+async function sincronizarTurnoCompleto(t: Turno, itens: ItensAlterados = "todos") {
   try {
     let { error: errTurno } = await supabase.from("turnos").upsert(turnoToRow(t), { onConflict: "id" });
     if (errTurno && t.fechadoPor && ehColunaFaltando(errTurno)) {
@@ -476,6 +494,25 @@ async function sincronizarTurnoCompleto(t: Turno) {
       ({ error: errTurno } = await supabase.from("turnos").upsert(turnoToRow({ ...t, fechadoPor: undefined }), { onConflict: "id" }));
     }
     if (errTurno) throw errTurno;
+    if (itens !== "todos") {
+      // Só os campos alterados aqui, produto por produto (não apaga o que outro aparelho lançou)
+      for (const [productId, campos] of Object.entries(itens)) {
+        const it = t.items[productId];
+        if (!it) continue;
+        const row: Record<string, unknown> = {};
+        for (const c of campos) if (COLUNA_ITEM[c]) row[COLUNA_ITEM[c]] = (it as any)[c] ?? null;
+        if (Object.keys(row).length === 0) continue;
+        const { data, error } = await supabase.from("turno_itens").update(row)
+          .eq("turno_id", t.id).eq("product_id", productId).select("product_id");
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          // Produto ainda não existe no turno do banco (ex.: cadastrado com o turno aberto): cria a linha inteira
+          const { error: errNovo } = await supabase.from("turno_itens").upsert(itemToRow(t.id, productId, it), { onConflict: "turno_id,product_id" });
+          if (errNovo) throw errNovo;
+        }
+      }
+      return;
+    }
     const itemRows = Object.entries(t.items).map(([productId, it]) => itemToRow(t.id, productId, it));
     if (itemRows.length > 0) {
       // onConflict explícito: turno_itens tem chave composta (turno_id + product_id)
@@ -795,6 +832,9 @@ function reducer(s: State, a: Action): State {
       }
       n = { ...s, turnoAtivo: a.turnoAtivo, historico: a.historico, estoqueQtd }; break;
     }
+    case "SET_TURNO_ATIVO_FROM_DB":
+      // Turno em andamento atualizado do banco (o que outro aparelho lançou: descarte, consumo...)
+      n = { ...s, turnoAtivo: a.turnoAtivo }; break;
     case "SET_PONTOS_FROM_DB": {
       // Mantém pontos lançados aqui que ainda não chegaram ao banco (ex.: bateu o ponto enquanto a
       // lista ainda carregava) — antes eles sumiam e o fechamento do turno reclamava do ponto.
@@ -1121,8 +1161,14 @@ export function vendeu(item: ShiftItem): number | null {
   return Math.max(0, total);
 }
 
+// O que saiu do estoque sem ser vendido: consumo dos funcionários, consumo da barraca (gelo) e descarte
+export const saidasSemVenda = (item: ShiftItem) => (item.consumo || 0) + (item.consumoEst || 0) + (item.descarte || 0);
+
+// Disponível = entrada + chegada − consumo − descarte (é o máximo que pode sobrar)
+export const disponivelItem = (item: ShiftItem) => item.entrada + (item.chegada ?? 0) - saidasSemVenda(item);
+
 export function sobraOverflow(item: ShiftItem): boolean {
-  return item.sobra != null && item.sobra > item.entrada + (item.chegada ?? 0);
+  return item.sobra != null && item.sobra > disponivelItem(item) + 1e-9;
 }
 
 // useLivePrice = true → usa o preço atual (state.precos), refletindo correções do dono em tempo real.
@@ -1670,9 +1716,30 @@ async function gravarAjusteFolha(row: Record<string, unknown>) {
   }
 }
 
+// Turno em andamento no banco (com os produtos). undefined = não deu para consultar (sem internet).
+export async function buscarTurnoAberto(): Promise<Turno | null | undefined> {
+  const { data, error } = await supabase.from("turnos").select("*").is("closed_at", null)
+    .order("created_at", { ascending: false }).limit(1);
+  if (error) return undefined;
+  if (!data || data.length === 0) return null;
+  const row = data[0];
+  const { data: itemRows, error: errItens } = await supabase.from("turno_itens").select("*").eq("turno_id", row.id);
+  if (errItens) return undefined;
+  const items: Record<string, ShiftItem> = {};
+  for (const ir of itemRows ?? []) items[ir.product_id] = shiftItemFromRow(ir);
+  return turnoFromRow(row, items);
+}
+
 // ---- Fila de envio: o que cada tipo de lançamento faz no Supabase (ver lib/fila.ts) ----
 // Turno: vai a foto completa do turno; uma nova foto do mesmo turno substitui a que estava esperando.
-const enviarTurno = (t: Turno) => enviar("turno", t, { chave: `turno:${t.id}` });
+// Envio pendente antigo (versões anteriores) guardava só o turno: vale como "todos os produtos"
+type EnvioTurno = { turno: Turno; itens: ItensAlterados };
+const comoEnvioTurno = (d: any): EnvioTurno => (d && d.turno ? d : { turno: d as Turno, itens: "todos" });
+const enviarTurno = (t: Turno, itens: ItensAlterados = "todos") =>
+  enviar("turno", { turno: t, itens }, {
+    chave: `turno:${t.id}`,
+    mesclar: (ant, novo: EnvioTurno) => ({ turno: novo.turno, itens: unirItensAlterados(comoEnvioTurno(ant).itens, novo.itens) }),
+  });
 const enviarExclusaoTurno = (id: string) => enviar("turnoExcluir", id, { chave: `turno-excluir:${id}`, cancelar: [`turno:${id}`] });
 
 async function gravarDesconto(row: ReturnType<typeof descontoToRow>) {
@@ -1688,7 +1755,7 @@ async function gravarConfig(d: { cfg: ConfigGeral; taxas: TaxasMaquininha }) {
   if (error) throw error;
 }
 
-registrarExecutor("turno", (t: Turno) => sincronizarTurnoCompleto(t));
+registrarExecutor("turno", (d: any) => { const e = comoEnvioTurno(d); return sincronizarTurnoCompleto(e.turno, e.itens); });
 registrarExecutor("turnoExcluir", (id: string) => excluirTurnoSupabase(id));
 registrarExecutor("funcionario", (a: Action) => sincronizarFuncionario(a));
 registrarExecutor("ponto", (a: Action) => sincronizarPonto(a));
@@ -1791,7 +1858,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const excluidosAqui = new Set(pendentesDoTipo<string>("turnoExcluir"));
         historico = historico.filter((t) => !excluidosAqui.has(t.id));
         if (turnoAtivo && excluidosAqui.has(turnoAtivo.id)) turnoAtivo = null;
-        for (const t of pendentesDoTipo<Turno>("turno")) {
+        for (const t of pendentesDoTipo<any>("turno").map((d) => comoEnvioTurno(d).turno)) {
           if (t.closedAt) {
             historico = [t, ...historico.filter((h) => h.id !== t.id)];
             if (turnoAtivo?.id === t.id) turnoAtivo = null;
@@ -1802,6 +1869,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
         // O que veio do banco substitui o que estava no aparelho; nada disso é reenviado.
         turnoSujoRef.current = false;
+        itensAlteradosRef.current = {};
         estoqueSujoRef.current = false;
         dispatch({ type: "SET_TURNOS_FROM_DB", turnoAtivo, historico });
       } catch (e) {
@@ -1878,10 +1946,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Produtos/campos do turno em andamento alterados aqui e ainda não enviados
+  const itensAlteradosRef = useRef<ItensAlterados>({});
+  const histItensRef = useRef(new Map<string, ItensAlterados>()); // idem, para fechamentos/correções
+  const pegarAlterados = (): ItensAlterados => {
+    const v = itensAlteradosRef.current;
+    itensAlteradosRef.current = {};
+    return v;
+  };
+  const marcarAlterado = (productId: string, campos: string[]) => {
+    itensAlteradosRef.current = unirItensAlterados(itensAlteradosRef.current, { [productId]: campos });
+  };
+
   const flushSincronizacaoTurno = () => {
     if (turnoSyncTimerRef.current) {
       cancelarSincronizacaoTurno();
-      if (turnoAtivoAnteriorRef.current) enviarTurno(turnoAtivoAnteriorRef.current);
+      if (turnoAtivoAnteriorRef.current) enviarTurno(turnoAtivoAnteriorRef.current, pegarAlterados());
     }
   };
 
@@ -1895,9 +1975,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     cancelarSincronizacaoTurno();
     turnoSyncTimerRef.current = setTimeout(() => {
       turnoSyncTimerRef.current = null;
-      enviarTurno(turno);
+      enviarTurno(turno, pegarAlterados());
     }, 500);
   }, [state.turnoAtivo]);
+
+  // Atualiza o turno em andamento com o que está no banco (lançado por outro aparelho), mas só quando
+  // não há nada deste aparelho esperando para ser enviado — assim nunca desfaz o que foi digitado aqui.
+  const temAlteracaoLocalDoTurno = () =>
+    !!turnoSyncTimerRef.current || turnoSujoRef.current || pendentesDoTipo("turno").length > 0 ||
+    (itensAlteradosRef.current === "todos" || Object.keys(itensAlteradosRef.current).length > 0);
+  const atualizarTurnoAberto = async () => {
+    if (!turnosCarregadosRef.current || temAlteracaoLocalDoTurno()) return;
+    const doBanco = await buscarTurnoAberto();
+    if (doBanco === undefined || temAlteracaoLocalDoTurno()) return; // sem internet, ou digitou nesse meio-tempo
+    const atual = stateRef.current.turnoAtivo;
+    if (!doBanco && !atual) return;
+    if (doBanco && atual && JSON.stringify(doBanco) === JSON.stringify({ ...atual, fechadoPor: doBanco.fechadoPor })) return;
+    dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: doBanco });
+  };
 
   // Recarrega os produtos (preço, estoque) ao voltar para o app — o dono pode ter mudado algo em outro aparelho
   const recarregarProdutos = () => {
@@ -1910,12 +2005,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const flushTudo = () => { flushSincronizacaoTurno(); flushSyncPendentes(); };
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") flushTudo();
-      else { void processar(); recarregarProdutos(); }
+      else { void processar().then(atualizarTurnoAberto); recarregarProdutos(); }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pagehide", flushTudo);
     // Sem internet: tenta reenviar o que está esperando a cada 20 segundos
-    const tentarDeNovo = setInterval(() => { void processar(); }, 20000);
+    // e atualiza o turno em andamento com o que outros aparelhos lançaram
+    const tentarDeNovo = setInterval(() => { void processar().then(atualizarTurnoAberto); }, 20000);
     return () => {
       clearInterval(tentarDeNovo);
       document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -1931,7 +2027,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     for (const t of state.historico) {
       if (pendentes.has(t.id)) {
         pendentes.delete(t.id);
-        enviarTurno(t);
+        enviarTurno(t, histItensRef.current.get(t.id) ?? "todos");
+        histItensRef.current.delete(t.id);
       }
     }
   }, [state.historico]);
@@ -1966,22 +2063,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ) {
       turnoSujoRef.current = true;
     }
+    // Quais produtos/campos mudaram (só eles vão para o banco)
+    if (a.type === "START_SHIFT" || a.type === "EDIT_ATIVO") itensAlteradosRef.current = "todos";
+    else if (a.type === "UPDATE_ITEM") marcarAlterado(a.productId, Object.keys(a.patch));
+    else if (a.type === "SYNC_TURNO_ITEMS") {
+      for (const p of a.products) if (!antes.turnoAtivo?.items[p.id]) marcarAlterado(p.id, Object.keys(COLUNA_ITEM));
+    }
 
     if (a.type === "CLOSE_SHIFT") {
       // O envio pendente do turno aberto é cancelado: quem vai para o banco é a versão fechada
+      // (com os produtos alterados aqui que ainda não tinham ido)
       if (!antes.turnoAtivo) return;
       cancelarSincronizacaoTurno();
       turnoSujoRef.current = false;
       histPendentesRef.current.add(antes.turnoAtivo.id);
+      histItensRef.current.set(antes.turnoAtivo.id, pegarAlterados());
     } else if (a.type === "EDIT_HIST") {
       histPendentesRef.current.add(a.id);
+      histItensRef.current.set(a.id, "todos"); // correção do dono: vale o turno inteiro
     } else if (a.type === "AJUSTAR_BASE_MAQ") {
       if (antes.turnoAtivo?.id === a.id) turnoSujoRef.current = true;
-      else histPendentesRef.current.add(a.id);
+      else { histPendentesRef.current.add(a.id); histItensRef.current.set(a.id, {}); }
     } else if (a.type === "DISCARD_SHIFT") {
       if (!antes.turnoAtivo) return;
       cancelarSincronizacaoTurno();
       turnoSujoRef.current = false;
+      pegarAlterados();
       enviarExclusaoTurno(antes.turnoAtivo.id);
     } else if (a.type === "DELETE_TURNO") {
       // Remove do Supabase (os itens do turno somem junto) e cancela qualquer envio pendente dele
