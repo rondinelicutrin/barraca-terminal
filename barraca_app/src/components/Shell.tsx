@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { AvisoEnvio } from "@/components/AvisoEnvio";
-import { useStore } from "@/lib/store";
+import { useStore, normalizarUsuario, type State } from "@/lib/store";
+import { formatDateBR, shiftLabel } from "@/lib/format";
 import { Home, ClipboardList, Package, LogOut, LayoutDashboard, Users, BarChart3, LineChart } from "lucide-react";
 
 export function BottomNav() {
@@ -80,6 +81,40 @@ export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen w-full flex justify-center bg-background">
       <div className="w-full max-w-[520px] pb-[calc(5rem+env(safe-area-inset-bottom))] min-h-screen relative">{children}</div>
+    </div>
+  );
+}
+
+// Enquanto um turno está aberto, só quem o abriu (e o dono/administradores, que usam o Painel) pode usar
+// as telas de Turno e Ponto. Evita que outro funcionário entre no turno da pessoa pelo celular dele e
+// altere valores ou apague lançamentos dela.
+export function turnoDeOutroFuncionario(state: State) {
+  const t = state.turnoAtivo;
+  const me = state.currentUser;
+  if (!t || !me || me.role === "owner") return null;
+  return normalizarUsuario(t.employee) === normalizarUsuario(me.username) ? null : t;
+}
+
+export function TurnoBloqueado() {
+  const { state, dispatch } = useStore();
+  const nav = useNavigate();
+  const t = turnoDeOutroFuncionario(state);
+  if (!t) return null;
+  const nome = state.funcionarios.find((f) => normalizarUsuario(f.username) === normalizarUsuario(t.employee))?.nome ?? t.employee;
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="max-w-sm w-full bg-card border border-destructive/50 rounded-2xl p-6 text-center space-y-3">
+        <div className="text-4xl">🔒</div>
+        <h1 className="text-lg font-semibold">Acesso bloqueado</h1>
+        <p className="text-sm text-muted-foreground">
+          O turno {shiftLabel(t.shift)} de {formatDateBR(t.date)} está aberto por <span className="text-foreground font-medium">{nome}</span>.
+          Enquanto ele estiver aberto, só {nome} e o administrador podem usar o app.
+        </p>
+        <button type="button" className="w-full h-11 rounded-md bg-primary text-primary-foreground font-medium"
+          onClick={() => { dispatch({ type: "LOGOUT" }); nav({ to: "/" }); }}>
+          Sair
+        </button>
+      </div>
     </div>
   );
 }
