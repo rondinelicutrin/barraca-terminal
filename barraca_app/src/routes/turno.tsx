@@ -1,8 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Shell, TopBar, BottomNav } from "@/components/Shell";
+import { Shell, TopBar, BottomNav, TurnoBloqueado, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, getAllProducts, vendeu, sobraOverflow, esperadoTurno,
+  useStore, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
@@ -30,6 +30,7 @@ function TurnoPage() {
     else if (state.currentUser.role === "owner") nav({ to: "/owner" });
   }, [state.hidratado, state.currentUser, nav]);
   if (!state.currentUser || state.currentUser.role !== "employee") return null;
+  if (turnoDeOutroFuncionario(state)) return <TurnoBloqueado />;
   return (
     <Shell>
       {state.turnoAtivo ? <ActiveShift /> : <StartShift />}
@@ -42,15 +43,29 @@ function TurnoPage() {
 // (excluindo casquinhas), para o funcionário/dono terem noção do total em tempo real.
 function TotalPasteisResumo({ products, items }: { products: ReturnType<typeof getAllProducts>; items: Record<string, ShiftItem> }) {
   const pasteis = products.filter((p) => p.category === "pastel" && !EXCLUIR_DO_TOTAL_PASTEL.has(p.id));
-  const total = pasteis.reduce((s, p) => s + (items[p.id]?.sobra ?? 0), 0);
+  const soma = (f: (it: ShiftItem) => number) => pasteis.reduce((s, p) => s + (items[p.id] ? f(items[p.id]) : 0), 0);
+  const total = soma((it) => it.sobra ?? 0);
+  const entrou = soma((it) => it.entrada + (it.chegada ?? 0));
+  const consumo = soma((it) => it.consumo || 0);
+  const descarte = soma((it) => it.descarte || 0);
+  const vendidos = soma((it) => vendeu(it) ?? 0);
   const faltam = pasteis.filter((p) => items[p.id]?.sobra == null).length;
   return (
-    <div className="bg-card border border-primary/40 rounded-xl p-3 flex items-center justify-between">
-      <div>
-        <div className="text-sm font-semibold">Total de pastéis</div>
-        {faltam > 0 && <div className="text-[11px] text-muted-foreground">{faltam} sabor(es) sem sobra preenchida ainda</div>}
+    <div className="bg-card border border-primary/40 rounded-xl p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-semibold">Total de pastéis (sobra)</div>
+          {faltam > 0 && <div className="text-[11px] text-muted-foreground">{faltam} sabor(es) sem sobra preenchida ainda</div>}
+        </div>
+        <div className="text-xl font-semibold mono text-primary">{total}</div>
       </div>
-      <div className="text-xl font-semibold mono text-primary">{total}</div>
+      {/* Soma geral dos pastéis: o consumo e o descarte são descontados (não contam como vendidos) */}
+      <div className="grid grid-cols-2 gap-x-3 text-[11px] text-muted-foreground mono">
+        <span>Entrada + chegada: <span className="text-foreground">{entrou}</span></span>
+        <span>Consumo: <span className="text-foreground">{consumo}</span></span>
+        <span>Descarte: <span className="text-foreground">{descarte}</span></span>
+        <span>Vendidos: <span className="text-foreground font-semibold">{vendidos}</span></span>
+      </div>
     </div>
   );
 }
@@ -312,6 +327,7 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
   // Limite máximo para sobra/consumo/descarte = entrada + chegada
   const limiteEstoque = estoqueTotal;
 
+  const fmtQ = (n: number) => (product.decimal ? num(n) : String(n));
   const upd = (patch: Partial<ShiftItem>) =>
     dispatch({ type: "UPDATE_ITEM", productId: product.id, patch });
 
@@ -319,9 +335,14 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
   // n=0 é um valor real e explícito (acabou tudo) e deve ser aceito normalmente.
   // Com a chegada ainda vazia não dá para saber o limite (a pessoa pode preencher a sobra primeiro);
   // com a chegada preenchida — inclusive 0 — a sobra nunca pode passar de entrada + chegada.
+  // O consumo e o descarte já saíram do estoque: a sobra não pode passar do que ficou disponível.
+  const saidas = saidasSemVenda(item);
+  const disponivel = disponivelItem(item);
   const handleSobra = (n: number | null) => {
-    if (n != null && n > limiteEstoque && (item.chegada != null || limiteEstoque > 0)) {
-      alert(`Sobra não pode ser maior que entrada + chegada (${limiteEstoque}).`);
+    if (n != null && n > disponivel && (item.chegada != null || limiteEstoque > 0)) {
+      alert(saidas > 0
+        ? `Sobra não pode ser maior que o disponível: entrada + chegada (${fmtQ(limiteEstoque)}) − consumo/descarte (${fmtQ(saidas)}) = ${fmtQ(disponivel)}.`
+        : `Sobra não pode ser maior que entrada + chegada (${fmtQ(limiteEstoque)}).`);
       return;
     }
     upd({ sobra: n });
@@ -370,6 +391,14 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
         </div>
       )}
 
+      {saidas > 0 && (
+        <div className="mt-1.5 text-[11px] text-muted-foreground flex flex-wrap gap-x-3">
+          {(item.consumo || 0) > 0 && <span>Consumo: <span className="mono text-foreground">{fmtQ(item.consumo)}</span></span>}
+          {(item.consumoEst || 0) > 0 && <span>Consumo barraca: <span className="mono text-foreground">{fmtQ(item.consumoEst ?? 0)}</span></span>}
+          {(item.descarte || 0) > 0 && <span>Descarte: <span className="mono text-foreground">{fmtQ(item.descarte)}</span></span>}
+          <span>Disponível: <span className="mono text-foreground font-semibold">{fmtQ(disponivel)}</span></span>
+        </div>
+      )}
       <div className="mt-2 flex justify-between items-center text-xs">
         <span className="text-muted-foreground">Vendeu</span>
         <span className="mono font-semibold text-primary">
