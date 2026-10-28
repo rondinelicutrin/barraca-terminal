@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { AvisoEnvio } from "@/components/AvisoEnvio";
-import { useStore, normalizarUsuario, type State } from "@/lib/store";
+import { useStore, normalizarUsuario, buscarTurnoAberto, type State, type Turno } from "@/lib/store";
 import { formatDateBR, shiftLabel } from "@/lib/format";
 import { Home, ClipboardList, Package, LogOut, LayoutDashboard, Users, BarChart3, LineChart } from "lucide-react";
 
@@ -88,18 +88,47 @@ export function Shell({ children }: { children: React.ReactNode }) {
 // Enquanto um turno está aberto, só quem o abriu (e o dono/administradores, que usam o Painel) pode usar
 // as telas de Turno e Ponto. Evita que outro funcionário entre no turno da pessoa pelo celular dele e
 // altere valores ou apague lançamentos dela.
-export function turnoDeOutroFuncionario(state: State) {
-  const t = state.turnoAtivo;
+export function turnoDeOutroFuncionario(state: State, t: Turno | null | undefined = state.turnoAtivo) {
   const me = state.currentUser;
-  if (!t || !me || me.role === "owner") return null;
+  if (!t || t.closedAt || !me || me.role === "owner") return null;
   return normalizarUsuario(t.employee) === normalizarUsuario(me.username) ? null : t;
 }
 
-export function TurnoBloqueado() {
+// Bloqueio do turno conferido NO BANCO, não só no que está no aparelho. No celular a aba fica aberta
+// por dias: o app podia estar sem saber que outra pessoa abriu um turno e deixava entrar, ver o
+// fechamento anterior e até abrir outro turno. Agora confere ao abrir a tela, ao voltar para o app e
+// a cada 15 segundos.
+export function useBloqueioTurno(): Turno | null {
+  const { state, dispatch } = useStore();
+  const [doBanco, setDoBanco] = useState<Turno | null | undefined>(undefined);
+  const funcionario = state.currentUser && state.currentUser.role !== "owner" ? state.currentUser.username : null;
+  useEffect(() => {
+    if (!funcionario) return;
+    let vivo = true;
+    const conferir = async () => {
+      const t = await buscarTurnoAberto();
+      if (!vivo || t === undefined) return; // sem internet: vale o que está no aparelho
+      setDoBanco(t);
+    };
+    void conferir();
+    const onVis = () => { if (document.visibilityState === "visible") void conferir(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    const timer = setInterval(conferir, 15000);
+    return () => { vivo = false; clearInterval(timer); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", onVis); };
+  }, [funcionario]);
+  const bloqueio = turnoDeOutroFuncionario(state, doBanco) ?? turnoDeOutroFuncionario(state);
+  // O aparelho passa a conhecer o turno aberto pela outra pessoa (some a tela de abrir turno/fechamento anterior)
+  useEffect(() => {
+    if (bloqueio && doBanco && state.turnoAtivo?.id !== doBanco.id) dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: doBanco });
+  }, [bloqueio, doBanco, state.turnoAtivo?.id, dispatch]);
+  return bloqueio;
+}
+
+export function TurnoBloqueado({ turno }: { turno: Turno }) {
   const { state, dispatch } = useStore();
   const nav = useNavigate();
-  const t = turnoDeOutroFuncionario(state);
-  if (!t) return null;
+  const t = turno;
   const nome = state.funcionarios.find((f) => normalizarUsuario(f.username) === normalizarUsuario(t.employee))?.nome ?? t.employee;
   return (
     <div className="min-h-screen flex items-center justify-center p-6">

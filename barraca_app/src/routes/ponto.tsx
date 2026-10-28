@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Shell, TopBar, BottomNav, TurnoBloqueado, turnoDeOutroFuncionario } from "@/components/Shell";
+import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno } from "@/components/Shell";
 import { useStore, getAllProducts, valoresConsumoPonto, ehSoConsumo, type Ponto, type Turno } from "@/lib/store";
 import { useFiltro } from "@/lib/filtros";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
@@ -35,6 +35,7 @@ function periodoDoHorario(entrada: string): "Manhã" | "Tarde" | "Noite" {
 function PontoPage() {
   const { state, dispatch } = useStore();
   const nav = useNavigate();
+  const bloqueio = useBloqueioTurno();
 
   useEffect(() => {
     if (!state.hidratado) return; // espera ler o login salvo (F5 não desloga)
@@ -98,7 +99,7 @@ function PontoPage() {
 
   // Só depois de todos os hooks: sair antes deles fazia o React quebrar ao recarregar a página (F5)
   if (!me) return null;
-  if (turnoDeOutroFuncionario(state)) return <TurnoBloqueado />;
+  if (bloqueio) return <TurnoBloqueado turno={bloqueio} />;
 
   const hours = hoursBetween(entrada, saida);
 

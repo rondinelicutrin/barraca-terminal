@@ -9,35 +9,26 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as TurnoRouteImport } from './routes/turno'
-import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
-import { Route as PontoRouteImport } from './routes/ponto'
-import { Route as OwnerRouteImport } from './routes/owner'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as OwnerRouteImport } from './routes/owner'
+import { Route as PontoRouteImport } from './routes/ponto'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
+import { Route as TurnoRouteImport } from './routes/turno'
+import { Route as VersaoDotjsonRouteImport } from './routes/versao[.]json'
 import { Route as OwnerIndexRouteImport } from './routes/owner.index'
-import { Route as OwnerSobrasRouteImport } from './routes/owner.sobras'
-import { Route as OwnerProdutosRouteImport } from './routes/owner.produtos'
-import { Route as OwnerPagamentosRouteImport } from './routes/owner.pagamentos'
+import { Route as OwnerCaixaDiarioRouteImport } from './routes/owner.caixa-diario'
+import { Route as OwnerDescontosRouteImport } from './routes/owner.descontos'
+import { Route as OwnerFuncionariosRouteImport } from './routes/owner.funcionarios'
 import { Route as OwnerGestaoRouteImport } from './routes/owner.gestao'
 import { Route as OwnerHistoricoRouteImport } from './routes/owner.historico'
-import { Route as OwnerFuncionariosRouteImport } from './routes/owner.funcionarios'
-import { Route as OwnerDescontosRouteImport } from './routes/owner.descontos'
-import { Route as OwnerCaixaDiarioRouteImport } from './routes/owner.caixa-diario'
+import { Route as OwnerPagamentosRouteImport } from './routes/owner.pagamentos'
+import { Route as OwnerProdutosRouteImport } from './routes/owner.produtos'
+import { Route as OwnerSobrasRouteImport } from './routes/owner.sobras'
 import { Route as OwnerTurnoIdRouteImport } from './routes/owner.turno.$id'
 
-const TurnoRoute = TurnoRouteImport.update({
-  id: '/turno',
-  path: '/turno',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
-  id: '/sitemap.xml',
-  path: '/sitemap.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PontoRoute = PontoRouteImport.update({
-  id: '/ponto',
-  path: '/ponto',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OwnerRoute = OwnerRouteImport.update({
@@ -45,9 +36,24 @@ const OwnerRoute = OwnerRouteImport.update({
   path: '/owner',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const PontoRoute = PontoRouteImport.update({
+  id: '/ponto',
+  path: '/ponto',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TurnoRoute = TurnoRouteImport.update({
+  id: '/turno',
+  path: '/turno',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VersaoDotjsonRoute = VersaoDotjsonRouteImport.update({
+  id: '/versao.json',
+  path: '/versao.json',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OwnerIndexRoute = OwnerIndexRouteImport.update({
@@ -55,19 +61,19 @@ const OwnerIndexRoute = OwnerIndexRouteImport.update({
   path: '/',
   getParentRoute: () => OwnerRoute,
 } as any)
-const OwnerSobrasRoute = OwnerSobrasRouteImport.update({
-  id: '/sobras',
-  path: '/sobras',
+const OwnerCaixaDiarioRoute = OwnerCaixaDiarioRouteImport.update({
+  id: '/caixa-diario',
+  path: '/caixa-diario',
   getParentRoute: () => OwnerRoute,
 } as any)
-const OwnerProdutosRoute = OwnerProdutosRouteImport.update({
-  id: '/produtos',
-  path: '/produtos',
+const OwnerDescontosRoute = OwnerDescontosRouteImport.update({
+  id: '/descontos',
+  path: '/descontos',
   getParentRoute: () => OwnerRoute,
 } as any)
-const OwnerPagamentosRoute = OwnerPagamentosRouteImport.update({
-  id: '/pagamentos',
-  path: '/pagamentos',
+const OwnerFuncionariosRoute = OwnerFuncionariosRouteImport.update({
+  id: '/funcionarios',
+  path: '/funcionarios',
   getParentRoute: () => OwnerRoute,
 } as any)
 const OwnerGestaoRoute = OwnerGestaoRouteImport.update({
@@ -80,19 +86,19 @@ const OwnerHistoricoRoute = OwnerHistoricoRouteImport.update({
   path: '/historico',
   getParentRoute: () => OwnerRoute,
 } as any)
-const OwnerFuncionariosRoute = OwnerFuncionariosRouteImport.update({
-  id: '/funcionarios',
-  path: '/funcionarios',
+const OwnerPagamentosRoute = OwnerPagamentosRouteImport.update({
+  id: '/pagamentos',
+  path: '/pagamentos',
   getParentRoute: () => OwnerRoute,
 } as any)
-const OwnerDescontosRoute = OwnerDescontosRouteImport.update({
-  id: '/descontos',
-  path: '/descontos',
+const OwnerProdutosRoute = OwnerProdutosRouteImport.update({
+  id: '/produtos',
+  path: '/produtos',
   getParentRoute: () => OwnerRoute,
 } as any)
-const OwnerCaixaDiarioRoute = OwnerCaixaDiarioRouteImport.update({
-  id: '/caixa-diario',
-  path: '/caixa-diario',
+const OwnerSobrasRoute = OwnerSobrasRouteImport.update({
+  id: '/sobras',
+  path: '/sobras',
   getParentRoute: () => OwnerRoute,
 } as any)
 const OwnerTurnoIdRoute = OwnerTurnoIdRouteImport.update({
@@ -107,12 +113,13 @@ export interface FileRoutesByFullPath {
   '/ponto': typeof PontoRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/turno': typeof TurnoRoute
+  '/versao.json': typeof VersaoDotjsonRoute
   '/owner/caixa-diario': typeof OwnerCaixaDiarioRoute
   '/owner/descontos': typeof OwnerDescontosRoute
   '/owner/funcionarios': typeof OwnerFuncionariosRoute
+  '/owner/gestao': typeof OwnerGestaoRoute
   '/owner/historico': typeof OwnerHistoricoRoute
   '/owner/pagamentos': typeof OwnerPagamentosRoute
-  '/owner/gestao': typeof OwnerGestaoRoute
   '/owner/produtos': typeof OwnerProdutosRoute
   '/owner/sobras': typeof OwnerSobrasRoute
   '/owner/': typeof OwnerIndexRoute
@@ -123,12 +130,13 @@ export interface FileRoutesByTo {
   '/ponto': typeof PontoRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/turno': typeof TurnoRoute
+  '/versao.json': typeof VersaoDotjsonRoute
   '/owner/caixa-diario': typeof OwnerCaixaDiarioRoute
   '/owner/descontos': typeof OwnerDescontosRoute
   '/owner/funcionarios': typeof OwnerFuncionariosRoute
+  '/owner/gestao': typeof OwnerGestaoRoute
   '/owner/historico': typeof OwnerHistoricoRoute
   '/owner/pagamentos': typeof OwnerPagamentosRoute
-  '/owner/gestao': typeof OwnerGestaoRoute
   '/owner/produtos': typeof OwnerProdutosRoute
   '/owner/sobras': typeof OwnerSobrasRoute
   '/owner': typeof OwnerIndexRoute
@@ -141,12 +149,13 @@ export interface FileRoutesById {
   '/ponto': typeof PontoRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/turno': typeof TurnoRoute
+  '/versao.json': typeof VersaoDotjsonRoute
   '/owner/caixa-diario': typeof OwnerCaixaDiarioRoute
   '/owner/descontos': typeof OwnerDescontosRoute
   '/owner/funcionarios': typeof OwnerFuncionariosRoute
+  '/owner/gestao': typeof OwnerGestaoRoute
   '/owner/historico': typeof OwnerHistoricoRoute
   '/owner/pagamentos': typeof OwnerPagamentosRoute
-  '/owner/gestao': typeof OwnerGestaoRoute
   '/owner/produtos': typeof OwnerProdutosRoute
   '/owner/sobras': typeof OwnerSobrasRoute
   '/owner/': typeof OwnerIndexRoute
@@ -160,12 +169,13 @@ export interface FileRouteTypes {
     | '/ponto'
     | '/sitemap.xml'
     | '/turno'
+    | '/versao.json'
     | '/owner/caixa-diario'
     | '/owner/descontos'
     | '/owner/funcionarios'
+    | '/owner/gestao'
     | '/owner/historico'
     | '/owner/pagamentos'
-    | '/owner/gestao'
     | '/owner/produtos'
     | '/owner/sobras'
     | '/owner/'
@@ -176,12 +186,13 @@ export interface FileRouteTypes {
     | '/ponto'
     | '/sitemap.xml'
     | '/turno'
+    | '/versao.json'
     | '/owner/caixa-diario'
     | '/owner/descontos'
     | '/owner/funcionarios'
+    | '/owner/gestao'
     | '/owner/historico'
     | '/owner/pagamentos'
-    | '/owner/gestao'
     | '/owner/produtos'
     | '/owner/sobras'
     | '/owner'
@@ -193,12 +204,13 @@ export interface FileRouteTypes {
     | '/ponto'
     | '/sitemap.xml'
     | '/turno'
+    | '/versao.json'
     | '/owner/caixa-diario'
     | '/owner/descontos'
     | '/owner/funcionarios'
+    | '/owner/gestao'
     | '/owner/historico'
     | '/owner/pagamentos'
-    | '/owner/gestao'
     | '/owner/produtos'
     | '/owner/sobras'
     | '/owner/'
@@ -211,29 +223,16 @@ export interface RootRouteChildren {
   PontoRoute: typeof PontoRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   TurnoRoute: typeof TurnoRoute
+  VersaoDotjsonRoute: typeof VersaoDotjsonRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/turno': {
-      id: '/turno'
-      path: '/turno'
-      fullPath: '/turno'
-      preLoaderRoute: typeof TurnoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sitemap.xml': {
-      id: '/sitemap.xml'
-      path: '/sitemap.xml'
-      fullPath: '/sitemap.xml'
-      preLoaderRoute: typeof SitemapDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/ponto': {
-      id: '/ponto'
-      path: '/ponto'
-      fullPath: '/ponto'
-      preLoaderRoute: typeof PontoRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/owner': {
@@ -243,11 +242,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OwnerRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/ponto': {
+      id: '/ponto'
+      path: '/ponto'
+      fullPath: '/ponto'
+      preLoaderRoute: typeof PontoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/turno': {
+      id: '/turno'
+      path: '/turno'
+      fullPath: '/turno'
+      preLoaderRoute: typeof TurnoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/versao.json': {
+      id: '/versao.json'
+      path: '/versao.json'
+      fullPath: '/versao.json'
+      preLoaderRoute: typeof VersaoDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/owner/': {
@@ -257,25 +277,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OwnerIndexRouteImport
       parentRoute: typeof OwnerRoute
     }
-    '/owner/sobras': {
-      id: '/owner/sobras'
-      path: '/sobras'
-      fullPath: '/owner/sobras'
-      preLoaderRoute: typeof OwnerSobrasRouteImport
+    '/owner/caixa-diario': {
+      id: '/owner/caixa-diario'
+      path: '/caixa-diario'
+      fullPath: '/owner/caixa-diario'
+      preLoaderRoute: typeof OwnerCaixaDiarioRouteImport
       parentRoute: typeof OwnerRoute
     }
-    '/owner/produtos': {
-      id: '/owner/produtos'
-      path: '/produtos'
-      fullPath: '/owner/produtos'
-      preLoaderRoute: typeof OwnerProdutosRouteImport
+    '/owner/descontos': {
+      id: '/owner/descontos'
+      path: '/descontos'
+      fullPath: '/owner/descontos'
+      preLoaderRoute: typeof OwnerDescontosRouteImport
       parentRoute: typeof OwnerRoute
     }
-    '/owner/pagamentos': {
-      id: '/owner/pagamentos'
-      path: '/pagamentos'
-      fullPath: '/owner/pagamentos'
-      preLoaderRoute: typeof OwnerPagamentosRouteImport
+    '/owner/funcionarios': {
+      id: '/owner/funcionarios'
+      path: '/funcionarios'
+      fullPath: '/owner/funcionarios'
+      preLoaderRoute: typeof OwnerFuncionariosRouteImport
       parentRoute: typeof OwnerRoute
     }
     '/owner/gestao': {
@@ -292,25 +312,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OwnerHistoricoRouteImport
       parentRoute: typeof OwnerRoute
     }
-    '/owner/funcionarios': {
-      id: '/owner/funcionarios'
-      path: '/funcionarios'
-      fullPath: '/owner/funcionarios'
-      preLoaderRoute: typeof OwnerFuncionariosRouteImport
+    '/owner/pagamentos': {
+      id: '/owner/pagamentos'
+      path: '/pagamentos'
+      fullPath: '/owner/pagamentos'
+      preLoaderRoute: typeof OwnerPagamentosRouteImport
       parentRoute: typeof OwnerRoute
     }
-    '/owner/descontos': {
-      id: '/owner/descontos'
-      path: '/descontos'
-      fullPath: '/owner/descontos'
-      preLoaderRoute: typeof OwnerDescontosRouteImport
+    '/owner/produtos': {
+      id: '/owner/produtos'
+      path: '/produtos'
+      fullPath: '/owner/produtos'
+      preLoaderRoute: typeof OwnerProdutosRouteImport
       parentRoute: typeof OwnerRoute
     }
-    '/owner/caixa-diario': {
-      id: '/owner/caixa-diario'
-      path: '/caixa-diario'
-      fullPath: '/owner/caixa-diario'
-      preLoaderRoute: typeof OwnerCaixaDiarioRouteImport
+    '/owner/sobras': {
+      id: '/owner/sobras'
+      path: '/sobras'
+      fullPath: '/owner/sobras'
+      preLoaderRoute: typeof OwnerSobrasRouteImport
       parentRoute: typeof OwnerRoute
     }
     '/owner/turno/$id': {
@@ -327,9 +347,9 @@ interface OwnerRouteChildren {
   OwnerCaixaDiarioRoute: typeof OwnerCaixaDiarioRoute
   OwnerDescontosRoute: typeof OwnerDescontosRoute
   OwnerFuncionariosRoute: typeof OwnerFuncionariosRoute
+  OwnerGestaoRoute: typeof OwnerGestaoRoute
   OwnerHistoricoRoute: typeof OwnerHistoricoRoute
   OwnerPagamentosRoute: typeof OwnerPagamentosRoute
-  OwnerGestaoRoute: typeof OwnerGestaoRoute
   OwnerProdutosRoute: typeof OwnerProdutosRoute
   OwnerSobrasRoute: typeof OwnerSobrasRoute
   OwnerIndexRoute: typeof OwnerIndexRoute
@@ -340,9 +360,9 @@ const OwnerRouteChildren: OwnerRouteChildren = {
   OwnerCaixaDiarioRoute: OwnerCaixaDiarioRoute,
   OwnerDescontosRoute: OwnerDescontosRoute,
   OwnerFuncionariosRoute: OwnerFuncionariosRoute,
+  OwnerGestaoRoute: OwnerGestaoRoute,
   OwnerHistoricoRoute: OwnerHistoricoRoute,
   OwnerPagamentosRoute: OwnerPagamentosRoute,
-  OwnerGestaoRoute: OwnerGestaoRoute,
   OwnerProdutosRoute: OwnerProdutosRoute,
   OwnerSobrasRoute: OwnerSobrasRoute,
   OwnerIndexRoute: OwnerIndexRoute,
@@ -357,6 +377,7 @@ const rootRouteChildren: RootRouteChildren = {
   PontoRoute: PontoRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   TurnoRoute: TurnoRoute,
+  VersaoDotjsonRoute: VersaoDotjsonRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
