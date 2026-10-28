@@ -1,8 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Shell, TopBar, BottomNav, TurnoBloqueado, turnoDeOutroFuncionario } from "@/components/Shell";
+import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem,
+  useStore, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
@@ -29,8 +29,9 @@ function TurnoPage() {
     if (!state.currentUser) nav({ to: "/" });
     else if (state.currentUser.role === "owner") nav({ to: "/owner" });
   }, [state.hidratado, state.currentUser, nav]);
+  const bloqueio = useBloqueioTurno();
   if (!state.currentUser || state.currentUser.role !== "employee") return null;
-  if (turnoDeOutroFuncionario(state)) return <TurnoBloqueado />;
+  if (bloqueio) return <TurnoBloqueado turno={bloqueio} />;
   return (
     <Shell>
       {state.turnoAtivo ? <ActiveShift /> : <StartShift />}
@@ -101,8 +102,22 @@ function StartShift() {
     setOutros((prev) => prev.includes(username) ? prev.filter((u) => u !== username) : [...prev, username]);
   };
 
-  const handleStart = () => {
+  const [abrindo, setAbrindo] = useState(false);
+  const handleStart = async () => {
     if (!date) { alert("Selecione a data do turno."); return; }
+    // Confere no banco se alguém já abriu um turno (em outro aparelho) antes de abrir outro
+    setAbrindo(true);
+    const aberto = await buscarTurnoAberto();
+    setAbrindo(false);
+    if (aberto) {
+      if (turnoDeOutroFuncionario(state, aberto)) {
+        dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: aberto }); // mostra a tela de acesso bloqueado
+      } else {
+        alert(`Você já tem o turno ${shiftLabel(aberto.shift)} de ${aberto.date.split("-").reverse().join("/")} aberto. Ele foi carregado.`);
+        dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: aberto });
+      }
+      return;
+    }
     const exists = state.historico.find((t) => t.date === date && t.shift === shift);
     if (exists) {
       alert(`O turno ${shiftLabel(shift)} de ${date.split("-").reverse().join("/")} já foi fechado.`);
@@ -171,7 +186,7 @@ function StartShift() {
             </div>
           )}
 
-          <Button className="w-full h-11" onClick={handleStart}>Abrir turno</Button>
+          <Button className="w-full h-11" onClick={handleStart} disabled={abrindo}>{abrindo ? "Conferindo…" : "Abrir turno"}</Button>
         </div>
 
         <div className="bg-card border border-border rounded-xl p-4 space-y-2">
