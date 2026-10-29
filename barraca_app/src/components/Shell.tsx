@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { AvisoEnvio } from "@/components/AvisoEnvio";
-import { useStore, normalizarUsuario, buscarTurnoAberto, type State, type Turno } from "@/lib/store";
+import { useStore, normalizarUsuario, usaTurnoEPonto, buscarTurnoAberto, type State, type Turno } from "@/lib/store";
 import { formatDateBR, shiftLabel } from "@/lib/format";
-import { Home, ClipboardList, Package, LogOut, LayoutDashboard, Users, BarChart3, LineChart } from "lucide-react";
+import { Home, ClipboardList, Package, LogOut, LayoutDashboard, Users, BarChart3, LineChart, type LucideIcon } from "lucide-react";
 
 export function BottomNav() {
   const { state, dispatch } = useStore();
@@ -19,7 +19,20 @@ export function BottomNav() {
 
   if (!state.currentUser) return null;
 
-  const items = isOwner
+  const turnoEPonto = [
+    { to: "/turno", label: "Turno", icon: Home },
+    { to: "/ponto", label: "Ponto", icon: ClipboardList },
+  ];
+  const items: { to: string; label: string; icon: LucideIcon }[] = isOwner && usaTurnoEPonto(state.currentUser)
+    ? [
+        // Administrador (funcionário): Painel + Turno e Ponto. A Gestão continua no Painel (📈 Gestão).
+        { to: "/owner", label: "Painel", icon: LayoutDashboard },
+        ...turnoEPonto,
+        { to: "/owner/historico", label: "Histórico", icon: BarChart3 },
+        { to: "/owner/funcionarios", label: "Equipe", icon: Users },
+        { to: "/owner/produtos", label: "Produtos", icon: Package },
+      ]
+    : isOwner
     ? [
         { to: "/owner", label: "Painel", icon: LayoutDashboard },
         { to: "/owner/gestao", label: "Gestão", icon: LineChart },
@@ -27,10 +40,8 @@ export function BottomNav() {
         { to: "/owner/funcionarios", label: "Equipe", icon: Users },
         { to: "/owner/produtos", label: "Produtos", icon: Package },
       ]
-    : [
-        { to: "/turno", label: "Turno", icon: Home },
-        { to: "/ponto", label: "Ponto", icon: ClipboardList },
-      ];
+    : turnoEPonto;
+  const compacto = items.length > 5; // no celular, 7 botões só cabem um pouco menores
 
   return (
     <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[520px] bg-card/95 backdrop-blur border-t border-border z-40 safe-bottom">
@@ -42,7 +53,7 @@ export function BottomNav() {
             <Link
               key={it.to}
               to={it.to}
-              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-md text-[11px] ${active ? "text-primary" : "text-muted-foreground"}`}
+              className={`flex flex-col items-center gap-0.5 ${compacto ? "px-1 text-[10px]" : "px-3 text-[11px]"} py-1.5 rounded-md ${active ? "text-primary" : "text-muted-foreground"}`}
             >
               <Icon className="w-5 h-5" />
               <span>{it.label}</span>
@@ -51,7 +62,7 @@ export function BottomNav() {
         })}
         <button
           onClick={() => { dispatch({ type: "LOGOUT" }); nav({ to: "/" }); }}
-          className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-md text-[11px] text-muted-foreground"
+          className={`flex flex-col items-center gap-0.5 ${compacto ? "px-1 text-[10px]" : "px-3 text-[11px]"} py-1.5 rounded-md text-muted-foreground`}
         >
           <LogOut className="w-5 h-5" />
           <span>Sair</span>

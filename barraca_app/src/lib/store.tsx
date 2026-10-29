@@ -100,6 +100,11 @@ export function ehSoConsumo(p: Pick<Ponto, "entrada" | "saida" | "transporte" | 
 // Usuário comparado sem espaços nas pontas e sem diferença de maiúsculas/minúsculas
 export const normalizarUsuario = (u: string) => u.trim().toLowerCase();
 
+// Quem usa as telas de Turno e Ponto: funcionários e também os funcionários cadastrados como
+// Administrador (que além disso têm o Painel). O usuário "dono" fica só no Painel.
+export const usaTurnoEPonto = (u: { role: string; username: string } | null | undefined) =>
+  !!u && (u.role !== "owner" || normalizarUsuario(u.username) !== "dono");
+
 export interface User {
   role: "owner" | "employee";
   username: string;

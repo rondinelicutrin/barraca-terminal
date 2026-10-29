@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
+  useStore, usaTurnoEPonto, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
@@ -27,10 +27,10 @@ function TurnoPage() {
   useEffect(() => {
     if (!state.hidratado) return; // espera ler o login salvo (F5 não desloga)
     if (!state.currentUser) nav({ to: "/" });
-    else if (state.currentUser.role === "owner") nav({ to: "/owner" });
+    else if (!usaTurnoEPonto(state.currentUser)) nav({ to: "/owner" });
   }, [state.hidratado, state.currentUser, nav]);
   const bloqueio = useBloqueioTurno();
-  if (!state.currentUser || state.currentUser.role !== "employee") return null;
+  if (!usaTurnoEPonto(state.currentUser)) return null;
   if (bloqueio) return <TurnoBloqueado turno={bloqueio} />;
   return (
     <Shell>
