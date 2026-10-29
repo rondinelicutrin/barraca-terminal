@@ -9,6 +9,8 @@ import { gerarRelatorioPdf } from "@/lib/pdf";
 import { baixarCsv } from "@/lib/csv";
 import { Link as RLink } from "@tanstack/react-router";
 import { useFiltro } from "@/lib/filtros";
+import { SemanaPicker } from "@/components/SemanaPicker";
+import { inicioSemana, fimSemana, semanaPassada } from "@/lib/folha";
 
 export const Route = createFileRoute("/owner/")({
   component: Dashboard,
@@ -23,6 +25,13 @@ function Dashboard() {
     return d.toISOString().slice(0, 10);
   });
   const [to, setTo] = useFiltro("painel.to", todayISO());
+  // "semana": segunda a domingo (os pagamentos são semanais); "periodo": De/Até livres
+  const [modo, setModo] = useFiltro<"semana" | "periodo">("painel.modo", "periodo");
+  const irParaSemana = (segunda: string) => { setFrom(segunda); setTo(fimSemana(segunda)); };
+  const escolherModo = (m: "semana" | "periodo") => {
+    setModo(m);
+    if (m === "semana" && !(from === inicioSemana(from) && to === fimSemana(from))) irParaSemana(semanaPassada());
+  };
 
   const filtered = useMemo(() =>
     ordenarTurnos(state.historico.filter((t) => t.date >= from && t.date <= to)),
@@ -102,19 +111,33 @@ function Dashboard() {
           </div>
         } />
       <div className="p-3 space-y-3">
-        <div className="bg-card border border-border rounded-xl p-3 grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-muted-foreground">De</label>
-            <div className="mt-1">
-              <DatePickerBR value={from} onChange={setFrom} />
-            </div>
+        <div className="bg-card border border-border rounded-xl p-3 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            {([["periodo", "📅 De / Até"], ["semana", "🗓️ Por semana (seg a dom)"]] as const).map(([m, rotulo]) => (
+              <button key={m} type="button" onClick={() => escolherModo(m)}
+                className={`h-9 rounded-md text-xs border ${modo === m ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border text-muted-foreground"}`}>
+                {rotulo}
+              </button>
+            ))}
           </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Até</label>
-            <div className="mt-1">
-              <DatePickerBR value={to} onChange={setTo} />
+          {modo === "semana" ? (
+            <SemanaPicker inicio={inicioSemana(from)} onChange={irParaSemana} />
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-muted-foreground">De</label>
+                <div className="mt-1">
+                  <DatePickerBR value={from} onChange={setFrom} />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">Até</label>
+                <div className="mt-1">
+                  <DatePickerBR value={to} onChange={setTo} />
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-2">
