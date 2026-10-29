@@ -25,6 +25,10 @@ export interface MaquininhaRelatorio {
   real: number;                // vendido nela neste turno
 }
 
+// Entradas do turno por produto: entrada (estoque com que o turno começou) + chegada = total que entrou
+export interface LinhaEntrada { produto: string; entrada: string; chegada: string; total: string }
+export interface GrupoEntradas { categoria: string; linhas: LinhaEntrada[]; total?: string }
+
 export interface VendidoRelatorio { item: string; qtd: string }
 
 export interface ConsumoRelatorio { produto: string; funcionarios: number; barraca: number; descarte: number }
@@ -40,7 +44,8 @@ export interface RelatorioSobras {
   caixa: [string, number][];
   maquininhas: MaquininhaRelatorio[];
   consumo: ConsumoRelatorio[];
-  vendidos: VendidoRelatorio[]; // resumo: total vendido = entrada + chegada − sobra − consumo − descarte
+  vendidos: VendidoRelatorio[];
+  entradas: GrupoEntradas[]; // resumo das entradas (entrada + chegada) de cada produto lançado // resumo: total vendido = entrada + chegada − sobra − consumo − descarte
   esperado: number;
   arrecadado: number;
   diferenca: number;   // arrecadado − esperado
@@ -82,6 +87,36 @@ export function vendidosDoTurno(turno: Turno, products: Product[]): VendidoRelat
   const outros = soma(products.filter((p) => !usados.has(p.id) && p.saleable));
   if (outros > 0) linhas.push({ item: "Outros produtos", qtd: fmt(outros) });
   return linhas;
+}
+
+const GRUPOS_ENTRADA: { categoria: string; filtro: (p: Product) => boolean; somaPasteis?: boolean }[] = [
+  { categoria: "Pastéis", filtro: (p) => p.category === "pastel", somaPasteis: true },
+  { categoria: "Caldos", filtro: (p) => p.category === "caldo" },
+  { categoria: "Bebidas", filtro: (p) => p.category === "bebida" && p.id !== "ot_gelo" },
+  { categoria: "Gelo", filtro: (p) => p.id === "ot_gelo" },
+  { categoria: "Outros", filtro: (p) => p.category === "outros" },
+];
+
+// Só os produtos que tiveram entrada ou chegada no turno. No grupo dos pastéis, o total não soma as
+// casquinhas (igual ao total de pastéis do turno).
+export function entradasDoTurno(turno: Turno, products: Product[]): GrupoEntradas[] {
+  const fmt = (n: number, decimal?: boolean) => (decimal || !Number.isInteger(n) ? n.toLocaleString("pt-BR") : String(n));
+  const grupos: GrupoEntradas[] = [];
+  for (const g of GRUPOS_ENTRADA) {
+    let soma = 0;
+    const linhas: LinhaEntrada[] = [];
+    for (const p of products.filter(g.filtro)) {
+      const it = turno.items[p.id];
+      if (!it) continue;
+      const entrada = it.entrada || 0, chegada = it.chegada ?? 0, total = entrada + chegada;
+      if (total <= 0) continue;
+      linhas.push({ produto: p.name, entrada: fmt(entrada, p.decimal), chegada: fmt(chegada, p.decimal), total: fmt(total, p.decimal) });
+      if (!g.somaPasteis || !EXCLUIR_DO_TOTAL_PASTEL.has(p.id)) soma += total;
+    }
+    if (linhas.length === 0) continue;
+    grupos.push({ categoria: g.categoria, linhas, total: g.somaPasteis ? fmt(soma) : undefined });
+  }
+  return grupos;
 }
 
 const fmtQtd = (n: number, decimal?: boolean) => (decimal ? n.toLocaleString("pt-BR") : String(n));
@@ -150,7 +185,7 @@ export function montarRelatorioSobras(
     abertoPor: nome(turno.employee),
     fechadoPor: nome(turno.fechadoPor ?? turno.employee),
     colegas: (turno.outrosFuncionarios ?? []).map(nome),
-    grupos, caixa, maquininhas, consumo, vendidos: vendidosDoTurno(turno, products), esperado, arrecadado, diferenca, situacao,
+    grupos, caixa, maquininhas, consumo, vendidos: vendidosDoTurno(turno, products), entradas: entradasDoTurno(turno, products), esperado, arrecadado, diferenca, situacao,
     arquivoBase: `sobras-${turno.date}-${turno.shift}`,
   };
 }
@@ -171,6 +206,12 @@ export function baixarRelatorioSobrasPdf(r: RelatorioSobras) {
       columns: ["Item", "Vendido"],
       rows: r.vendidos.map((x) => [x.item, x.qtd]),
     },
+    ...r.entradas.map((g) => ({
+      heading: `Entradas do turno — ${g.categoria}`,
+      columns: ["Produto", "Entrada", "Chegada", "Total"],
+      rows: g.linhas.map((l) => [l.produto, l.entrada, l.chegada, l.total]),
+      totalRow: g.total != null ? ["Total de pastéis (sem casquinhas)", "", "", g.total] : undefined,
+    })),
     {
       heading: "Dinheiro, moedas e pix",
       columns: ["Item", "Valor"],
@@ -229,6 +270,13 @@ export function baixarRelatorioSobrasCsv(r: RelatorioSobras) {
     [],
     ["VENDIDOS NO TURNO", "Quantidade"],
     ...r.vendidos.map((x) => [s(x.item), x.qtd]),
+    [],
+    ["ENTRADAS DO TURNO", "Produto", "Entrada", "Chegada", "Total"],
+    ...r.entradas.flatMap((g) => [
+      ...g.linhas.map((l) => [g.categoria, s(l.produto), l.entrada, l.chegada, l.total]),
+      ...(g.total != null ? [[g.categoria, "TOTAL DE PASTÉIS (sem casquinhas)", "", "", g.total]] : []),
+    ]),
+    ...(r.entradas.length === 0 ? [["Nenhuma entrada lançada"]] : []),
     [],
     ["DINHEIRO, MOEDAS E PIX", "Valor (R$)"],
     ...r.caixa.map(([k, x]) => [k, v(x)]),

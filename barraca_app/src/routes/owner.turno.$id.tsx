@@ -10,6 +10,8 @@ import { BRL, formatDateBR, shiftLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
+import { EntradasDoTurno, RelatorioSobrasBotoes } from "@/components/FechamentoTurno";
+import { entradasDoTurno } from "@/lib/relatorio-sobras";
 
 export const Route = createFileRoute("/owner/turno/$id")({
   component: EditTurno,
@@ -173,6 +175,14 @@ function EditTurno() {
             <span className={`mono font-semibold ${Math.abs(diff) < 0.5 ? "text-success" : diff > 0 ? "text-warning" : "text-destructive"}`}>{BRL(diff)}</span></div>
         </div>
         <Button className="w-full" onClick={save}>Salvar alterações</Button>
+        <EntradasDoTurno grupos={entradasDoTurno(local, products)} />
+        {local.closedAt && (
+          <div className="bg-card border border-border rounded-xl p-3 space-y-2">
+            <div className="text-sm font-medium">Relatório do fechamento</div>
+            <p className="text-[11px] text-muted-foreground">Entradas, vendidos, sobras, caixa, maquininhas e consumos deste turno (já com as alterações salvas).</p>
+            <RelatorioSobrasBotoes turno={state.historico.find((h) => h.id === local.id) ?? local} />
+          </div>
+        )}
       </div>
       <BottomNav />
     </Shell>

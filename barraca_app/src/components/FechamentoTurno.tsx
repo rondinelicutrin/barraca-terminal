@@ -4,7 +4,7 @@ import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
-import { montarRelatorioSobras, baixarRelatorioSobrasPdf, baixarRelatorioSobrasCsv } from "@/lib/relatorio-sobras";
+import { montarRelatorioSobras, baixarRelatorioSobrasPdf, baixarRelatorioSobrasCsv, type GrupoEntradas } from "@/lib/relatorio-sobras";
 
 // Campos do caixa que precisam estar preenchidos (aceita 0) antes de fechar o turno.
 // Todos os campos de cada maquininha em uso são obrigatórios: no turno da noite os dois valores
@@ -54,6 +54,49 @@ export function situacaoPonto(state: ReturnType<typeof useStore>["state"], t: Tu
     ok: state.pontos.some((p) => p.employeeUsername === username && p.date === t.date && !ehSoConsumo(p)),
   }));
   return { situacao, semPonto: situacao.filter((s) => !s.ok) };
+}
+
+// Resumo das entradas (entrada + chegada) de cada produto lançado no turno
+export function EntradasDoTurno({ grupos }: { grupos: GrupoEntradas[] }) {
+  return (
+    <div className="bg-card border border-border rounded-xl p-3">
+      <div className="text-sm font-medium">📦 Entradas do turno</div>
+      <div className="text-[10px] text-muted-foreground mb-1">entrada + chegada de cada produto lançado</div>
+      {grupos.length === 0 ? (
+        <div className="text-xs text-muted-foreground">Nenhuma entrada lançada neste turno.</div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[11px] text-muted-foreground uppercase">
+              <th className="pb-1 font-normal">Produto</th>
+              <th className="pb-1 font-normal text-right">Entrada</th>
+              <th className="pb-1 font-normal text-right">Chegada</th>
+              <th className="pb-1 font-normal text-right">Total</th>
+            </tr>
+          </thead>
+          {grupos.map((g) => (
+            <tbody key={g.categoria}>
+              <tr><td colSpan={4} className="pt-2 pb-0.5 text-[11px] font-semibold text-primary uppercase">{g.categoria}</td></tr>
+              {g.linhas.map((l) => (
+                <tr key={l.produto} className="border-t border-border/50">
+                  <td className="py-1">{l.produto}</td>
+                  <td className="py-1 text-right mono text-muted-foreground">{l.entrada}</td>
+                  <td className="py-1 text-right mono text-muted-foreground">{l.chegada}</td>
+                  <td className="py-1 text-right mono font-semibold">{l.total}</td>
+                </tr>
+              ))}
+              {g.total != null && (
+                <tr className="border-t border-border font-semibold">
+                  <td className="py-1" colSpan={3}>Total de pastéis <span className="text-[10px] font-normal text-muted-foreground">(sem casquinhas)</span></td>
+                  <td className="py-1 text-right mono text-primary">{g.total}</td>
+                </tr>
+              )}
+            </tbody>
+          ))}
+        </table>
+      )}
+    </div>
+  );
 }
 
 function Row({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
@@ -218,6 +261,8 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
           ))}
         </div>
 
+        <EntradasDoTurno grupos={rel.entradas} />
+
         <div className="bg-card border border-border rounded-xl p-3">
           <div className="text-sm font-medium mb-2">🥟 Sobras de pastéis neste fechamento</div>
           {linhas.length === 0 ? (
@@ -256,7 +301,7 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
         <div className="bg-card border border-border rounded-xl p-3 space-y-2">
           <div className="text-sm font-medium">Relatório do fechamento (caixa, maquininhas, consumos e sobras)</div>
           <p className="text-[11px] text-muted-foreground">
-            Inclui dinheiro, moedas, pix, maquininhas (valor anterior e lançado), consumos, esperado × arrecadado,
+            Inclui entradas e vendidos de cada produto, dinheiro, moedas, pix, maquininhas (valor anterior e lançado), consumos, esperado × arrecadado,
             sobras de todos os produtos e quem fechou o turno. Gere o arquivo e envie para o dono.
           </p>
           <RelatorioSobrasBotoes turno={turno} />
