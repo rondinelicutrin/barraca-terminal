@@ -22,6 +22,7 @@ export interface GrupoProdutos {
   titulo: string; linhas: LinhaProduto[];
   total?: LinhaProduto; // só nos pastéis: soma dos sabores (sem casquinha)
   valorTotal: number;   // soma em R$ de tudo que foi vendido na subcategoria
+  destaque: boolean;    // título em negrito e linha "Total ... em R$" (o gelo, que é um produto só, não tem)
 }
 export interface ConsumoPessoa { nome: string; itens: string; valor: number }
 
@@ -34,11 +35,11 @@ export interface FechamentoImpresso {
   arquivoBase: string;
 }
 
-const GRUPOS: { titulo: string; filtro: (p: Product) => boolean; totalPasteis?: boolean }[] = [
+const GRUPOS: { titulo: string; filtro: (p: Product) => boolean; totalPasteis?: boolean; simples?: boolean }[] = [
   { titulo: "Pastéis", filtro: (p) => p.category === "pastel", totalPasteis: true },
   { titulo: "Caldo", filtro: (p) => p.category === "caldo" },
   { titulo: "Bebidas", filtro: (p) => p.category === "bebida" && p.id !== "ot_gelo" },
-  { titulo: "Gelo", filtro: (p) => p.id === "ot_gelo" },
+  { titulo: "Gelo", filtro: (p) => p.id === "ot_gelo", simples: true },
   { titulo: "Outros", filtro: (p) => p.category === "outros" },
 ];
 
@@ -64,7 +65,7 @@ export function montarFechamentoImpresso(turno: Turno, state: State): Fechamento
         total: (it.entrada || 0) + (it.chegada ?? 0), vendidos: vend, valor, decimal: p.decimal,
       };
     });
-    const grupo: GrupoProdutos = { titulo: g.titulo, linhas, valorTotal: linhas.reduce((s, l) => s + (l.valor ?? 0), 0) };
+    const grupo: GrupoProdutos = { titulo: g.titulo, linhas, valorTotal: linhas.reduce((s, l) => s + (l.valor ?? 0), 0), destaque: !g.simples };
     if (g.totalPasteis) {
       const sabores = linhas.filter((_, i) => !EXCLUIR_DO_TOTAL_PASTEL.has(doGrupo[i].id));
       const soma = (f: (l: LinhaProduto) => number) => sabores.reduce((s, l) => s + f(l), 0);
@@ -142,7 +143,7 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
   const M = 28, larg = W - M * 2;
   const r = f.base;
-  const nLinhasProdutos = f.grupos.reduce((s, g) => s + 2 + g.linhas.length + (g.total ? 1 : 0), 0) + 2;
+  const nLinhasProdutos = f.grupos.reduce((s, g) => s + (g.destaque ? 2 : 1) + g.linhas.length + (g.total ? 1 : 0), 0) + 2;
   const maq = maquininhasTabela(f);
   const nConsumo = Math.max(1, f.consumoFuncionarios.length);
   // Altura de uma linha (pt): começa em 11 e diminui se não couber numa folha
@@ -211,9 +212,12 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
     y += lh;
   };
   for (const g of f.grupos) {
-    texto(g.titulo, M + 4, y, { bold: true, size: fs + 1 }); y += lh;
+    if (g.destaque) texto(g.titulo, M + 4, y, { bold: true, size: fs + 1 });
+    else texto(g.titulo, M + 4, y, { cor: 90 });
+    y += lh;
     for (const l of g.linhas) linhaProduto(l);
     if (g.total) { traco(y - lh + 2.5); linhaProduto(g.total, true); }
+    if (!g.destaque) continue;
     // Valor em R$ da subcategoria inteira (nos pastéis inclui a casquinha frita)
     if (!g.total) traco(y - lh + 2.5);
     texto(rotuloTotalGrupo(g), xCol(0), y, { bold: true });
@@ -267,7 +271,7 @@ export function linhasFechamentoCsv(f: FechamentoImpresso): (string | number)[][
     linhas.push([g.titulo.toUpperCase()]);
     for (const l of g.linhas) linhas.push(linhaCsv(l));
     if (g.total) linhas.push(linhaCsv(g.total));
-    linhas.push([rotuloTotalGrupo(g), "", "", "", "", "", "", "", v(g.valorTotal)]);
+    if (g.destaque) linhas.push([rotuloTotalGrupo(g), "", "", "", "", "", "", "", v(g.valorTotal)]);
   }
   linhas.push(["Total vendido em produtos", "", "", "", "", "", "", "", v(f.totalVendido)], []);
   linhas.push(["5- CONSUMO FUNCIONÁRIO", "Itens", "Valor (R$)"]);
