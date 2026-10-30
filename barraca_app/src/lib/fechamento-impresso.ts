@@ -18,7 +18,11 @@ export interface LinhaProduto {
   valor: number | null; // vendidos × preço (null = produto que não é vendido, ex.: casquinha crua)
   decimal?: boolean;
 }
-export interface GrupoProdutos { titulo: string; linhas: LinhaProduto[]; total?: LinhaProduto }
+export interface GrupoProdutos {
+  titulo: string; linhas: LinhaProduto[];
+  total?: LinhaProduto; // só nos pastéis: soma dos sabores (sem casquinha)
+  valorTotal: number;   // soma em R$ de tudo que foi vendido na subcategoria
+}
 export interface ConsumoPessoa { nome: string; itens: string; valor: number }
 
 export interface FechamentoImpresso {
@@ -60,7 +64,7 @@ export function montarFechamentoImpresso(turno: Turno, state: State): Fechamento
         total: (it.entrada || 0) + (it.chegada ?? 0), vendidos: vend, valor, decimal: p.decimal,
       };
     });
-    const grupo: GrupoProdutos = { titulo: g.titulo, linhas };
+    const grupo: GrupoProdutos = { titulo: g.titulo, linhas, valorTotal: linhas.reduce((s, l) => s + (l.valor ?? 0), 0) };
     if (g.totalPasteis) {
       const sabores = linhas.filter((_, i) => !EXCLUIR_DO_TOTAL_PASTEL.has(doGrupo[i].id));
       const soma = (f: (l: LinhaProduto) => number) => sabores.reduce((s, l) => s + f(l), 0);
@@ -94,6 +98,9 @@ export function montarFechamentoImpresso(turno: Turno, state: State): Fechamento
     arquivoBase: `fechamento-${turno.date}-${turno.shift}`,
   };
 }
+
+const rotuloTotalGrupo = (g: GrupoProdutos) =>
+  g.total ? `Total ${g.titulo} em R$ (com casquinha frita)` : `Total ${g.titulo} em R$`;
 
 const qtd = (n: number | null, decimal?: boolean) =>
   n == null ? "-" : decimal || !Number.isInteger(n) ? n.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : String(n);
@@ -135,7 +142,7 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
   const M = 28, larg = W - M * 2;
   const r = f.base;
-  const nLinhasProdutos = f.grupos.reduce((s, g) => s + 1 + g.linhas.length + (g.total ? 1 : 0), 0) + 2;
+  const nLinhasProdutos = f.grupos.reduce((s, g) => s + 2 + g.linhas.length + (g.total ? 1 : 0), 0) + 2;
   const maq = maquininhasTabela(f);
   const nConsumo = Math.max(1, f.consumoFuncionarios.length);
   // Altura de uma linha (pt): começa em 11 e diminui se não couber numa folha
@@ -158,7 +165,7 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   const traco = (y: number, x1 = M, x2 = M + larg) => { doc.setDrawColor(210); doc.line(x1, y, x2, y); };
 
   let y = M + 12;
-  texto("Fechamento geral do turno", M, y, { bold: true, size: 15 });
+  texto(`Fechamento geral do turno · ${f.turnoNome.toUpperCase()}`, M, y, { bold: true, size: 15 });
   y += 15;
   for (const l of cabecalhoLinhas(f)) { texto(l, M, y, { size: 9, cor: 60 }); y += 11; }
   y += 6;
@@ -204,9 +211,14 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
     y += lh;
   };
   for (const g of f.grupos) {
-    texto(g.titulo, M + 4, y, { bold: true, cor: 90 }); y += lh;
+    texto(g.titulo, M + 4, y, { bold: true, size: fs + 1 }); y += lh;
     for (const l of g.linhas) linhaProduto(l);
     if (g.total) { traco(y - lh + 2.5); linhaProduto(g.total, true); }
+    // Valor em R$ da subcategoria inteira (nos pastéis inclui a casquinha frita)
+    if (!g.total) traco(y - lh + 2.5);
+    texto(rotuloTotalGrupo(g), xCol(0), y, { bold: true });
+    texto(reais(g.valorTotal), xCol(8), y, { bold: true, align: "right" });
+    y += lh + 2;
   }
   traco(y - lh + 2.5);
   texto("Total vendido em produtos", xCol(0), y, { bold: true });
@@ -235,7 +247,7 @@ export function linhasFechamentoCsv(f: FechamentoImpresso): (string | number)[][
   const r = f.base;
   const maq = maquininhasTabela(f);
   const linhas: (string | number)[][] = [
-    ["FECHAMENTO GERAL DO TURNO"],
+    [`FECHAMENTO GERAL DO TURNO · ${f.turnoNome.toUpperCase()}`],
     ...cabecalhoLinhas(f).map((l) => [s(l)]),
     [],
     ["1- RESULTADO DO TURNO", "Valor (R$)"],
@@ -255,6 +267,7 @@ export function linhasFechamentoCsv(f: FechamentoImpresso): (string | number)[][
     linhas.push([g.titulo.toUpperCase()]);
     for (const l of g.linhas) linhas.push(linhaCsv(l));
     if (g.total) linhas.push(linhaCsv(g.total));
+    linhas.push([rotuloTotalGrupo(g), "", "", "", "", "", "", "", v(g.valorTotal)]);
   }
   linhas.push(["Total vendido em produtos", "", "", "", "", "", "", "", v(f.totalVendido)], []);
   linhas.push(["5- CONSUMO FUNCIONÁRIO", "Itens", "Valor (R$)"]);
