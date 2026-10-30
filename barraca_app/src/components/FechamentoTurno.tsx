@@ -4,7 +4,8 @@ import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
-import { montarRelatorioSobras, baixarRelatorioSobrasPdf, baixarRelatorioSobrasCsv, type GrupoEntradas } from "@/lib/relatorio-sobras";
+import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
+import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv } from "@/lib/fechamento-impresso";
 
 // Campos do caixa que precisam estar preenchidos (aceita 0) antes de fechar o turno.
 // Todos os campos de cada maquininha em uso são obrigatórios: no turno da noite os dois valores
@@ -29,18 +30,18 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
   return lista;
 }
 
-// Dois botões (PDF e CSV) com as sobras de todos os produtos de um turno
+// Dois botões (PDF e CSV) com o fechamento geral do turno, numa folha só
 export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
   const { state } = useStore();
   const gerar = (formato: "pdf" | "csv") => {
-    const rel = montarRelatorioSobras(turno, getAllProducts(state), state.funcionarios, state.taxasMaquininha);
-    if (formato === "pdf") baixarRelatorioSobrasPdf(rel);
-    else baixarRelatorioSobrasCsv(rel);
+    const f = montarFechamentoImpresso(turno, state);
+    if (formato === "pdf") baixarFechamentoPdf(f);
+    else baixarFechamentoCsv(f);
   };
   return (
     <div className="grid grid-cols-2 gap-2">
-      <Button onClick={() => gerar("pdf")}>📄 Sobras (PDF)</Button>
-      <Button variant="secondary" onClick={() => gerar("csv")}>📊 Sobras (CSV)</Button>
+      <Button onClick={() => gerar("pdf")}>📄 Fechamento (PDF)</Button>
+      <Button variant="secondary" onClick={() => gerar("csv")}>📊 Fechamento (CSV)</Button>
     </div>
   );
 }
