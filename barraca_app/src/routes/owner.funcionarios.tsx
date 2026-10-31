@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, valorConsumoPonto, ehSoConsumo, normalizarUsuario, type Funcionario } from "@/lib/store";
-import { calcularFolha, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, horasEntre, type Folha, type DiaTrabalhado } from "@/lib/folha";
+import { calcularFolha, consumoSemDono, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, horasEntre, type Folha, type DiaTrabalhado } from "@/lib/folha";
 import { SemanaPicker } from "@/components/SemanaPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import { Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useFiltro } from "@/lib/filtros";
 import { supabase } from "@/lib/supabase";
+import { PeriodoComSemana } from "@/components/PeriodoComSemana";
 
 export const Route = createFileRoute("/owner/funcionarios")({
   component: Funcionarios,
@@ -662,7 +663,8 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
     .map((f) => {
       const meus = pontosDoPeriodo(state, f.username, from, to);
       const calc = calcularFolha(state, f, meus, from, to);
-      const temAlgo = calc.dias.length > 0 || calc.consumo > 0 || calc.adicionalSemana > 0 || calc.descontoSemana > 0;
+      // Consumo conta mesmo quando o valor é R$ 0 (ex.: água grátis): antes a pessoa sumia da folha
+      const temAlgo = calc.dias.length > 0 || calc.consumoDetalhe.length > 0 || calc.adicionalSemana > 0 || calc.descontoSemana > 0;
       return { f, calc, temAlgo };
     })
     .filter((r) => r.temAlgo || r.f.ativo !== false)
@@ -670,6 +672,7 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
   [state, from, to]);
 
   const totalPagar = rows.reduce((s, r) => s + r.calc.liquido, 0);
+  const semDono = useMemo(() => consumoSemDono(state, from, to), [state, from, to]);
   const ajuste = (username: string) => state.ajustesFolha[chaveAjuste(username, semana)];
   const setAjuste = (username: string, patch: { adicional?: number; desconto?: number; observacao?: string }) =>
     dispatch({ type: "SET_AJUSTE_FOLHA", username, semana, patch });
@@ -712,6 +715,24 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             valor a receber já sai calculado. Lance aqui o adicional ou desconto só desta semana.
           </p>
           <SemanaPicker inicio={semana} onChange={setSemana} />
+
+          {semDono.length > 0 && (
+            <div role="alert" className="bg-warning/10 border border-warning/60 rounded-lg p-3 space-y-1.5">
+              <div className="text-sm font-semibold">⚠️ Consumo sem funcionário nesta semana</div>
+              <p className="text-[11px] text-muted-foreground">
+                Saiu do estoque do turno como consumo, mas não está no ponto de ninguém — por isso não foi descontado na folha.
+                Para cobrar, lance o consumo da pessoa no menu Ponto (com a data do dia) ou ajuste o desconto da semana abaixo.
+              </p>
+              <div className="text-xs mono space-y-0.5">
+                {semDono.map((c) => (
+                  <div key={c.date + c.produto} className="flex justify-between gap-2">
+                    <span>{formatDateBR(c.date)} · {c.produto}</span>
+                    <span>turno {c.noTurno} · folha {c.naFolha} · <b>faltam {c.noTurno - c.naFolha}</b></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="bg-card border border-primary/40 rounded-lg p-3 flex justify-between items-center">
             <span className="text-sm font-semibold">Total a pagar na semana</span>
@@ -968,16 +989,7 @@ function RelatorioExcelDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent className="max-w-[480px] max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Relatório da equipe</DialogTitle></DialogHeader>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs text-muted-foreground">De</label>
-              <div className="mt-1"><DatePickerBR value={from} onChange={setFrom} /></div>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Até</label>
-              <div className="mt-1"><DatePickerBR value={to} onChange={setTo} /></div>
-            </div>
-          </div>
+          <PeriodoComSemana from={from} to={to} setFrom={setFrom} setTo={setTo} />
           <p className="text-[11px] text-muted-foreground">
             Detalhamento dia a dia (data, período, entrada/saída, atraso, tipo de pagamento, alimentação,
             transporte, consumo) + resumo de pagamento por funcionário (bruto, desconto, adicional e valor a

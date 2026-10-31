@@ -156,3 +156,32 @@ export function calcularFolha(state: State, f: Funcionario, meus: Ponto[], from?
 
 export const pontosDoPeriodo = (state: State, username: string, from: string, to: string) =>
   state.pontos.filter((p) => p.employeeUsername === username && p.date >= from && p.date <= to);
+
+// Conferência da folha: consumo que saiu do estoque dos turnos (coluna Consumo do turno) mas não está
+// no registro de ponto de nenhum funcionário — ou seja, não é descontado de ninguém na folha.
+// Acontece quando o consumo é lançado direto no turno ou quando o lançamento no Ponto não foi salvo.
+export interface ConsumoSemDono { date: string; produto: string; noTurno: number; naFolha: number }
+
+export function consumoSemDono(state: State, from: string, to: string): ConsumoSemDono[] {
+  const produtos = getAllProducts(state);
+  const chave = (date: string, pid: string) => `${date}|${pid}`;
+  const noTurno: Record<string, number> = {};
+  for (const t of [...state.historico, ...(state.turnoAtivo ? [state.turnoAtivo] : [])]) {
+    if (t.date < from || t.date > to) continue;
+    for (const [pid, it] of Object.entries(t.items)) {
+      if ((it.consumo || 0) > 0) noTurno[chave(t.date, pid)] = (noTurno[chave(t.date, pid)] ?? 0) + it.consumo;
+    }
+  }
+  const naFolha: Record<string, number> = {};
+  for (const p of state.pontos) {
+    if (p.date < from || p.date > to) continue;
+    for (const c of p.consumo) naFolha[chave(p.date, c.productId)] = (naFolha[chave(p.date, c.productId)] ?? 0) + c.qty;
+  }
+  return Object.entries(noTurno)
+    .filter(([k, q]) => q > (naFolha[k] ?? 0) + 1e-9)
+    .map(([k, q]) => {
+      const [date, pid] = k.split("|");
+      return { date, produto: produtos.find((p) => p.id === pid)?.name ?? pid, noTurno: q, naFolha: naFolha[k] ?? 0 };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.produto.localeCompare(b.produto));
+}
