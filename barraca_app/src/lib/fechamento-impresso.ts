@@ -237,7 +237,7 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
     y += lh;
     for (const l of g.linhas) linhaProduto(l);
     if (g.total) { traco(y - lh + 2.5); linhaProduto(g.total, true); }
-    if (!g.destaque || !f.completo) continue;
+    if (!g.destaque || !f.completo) { y += 2; continue; }
     // Valor em R$ da subcategoria inteira (nos pastéis inclui a casquinha frita)
     if (!g.total) traco(y - lh + 2.5);
     texto(rotuloTotalGrupo(g), xCol(0), y, { bold: true });
