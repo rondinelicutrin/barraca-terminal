@@ -448,7 +448,7 @@ function PontoPage() {
               )}
             </div>
           )}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" id="lancar-consumo-descarte">
             <Button variant="secondary" className="w-full" onClick={() => setShowDescarte(true)} disabled={!state.turnoAtivo}>
               🗑 Descarte ({qtdItens(state.turnoAtivo ? collectDescarte(state.turnoAtivo.items) : {})})
             </Button>

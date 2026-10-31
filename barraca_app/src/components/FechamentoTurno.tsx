@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useStore, veResultadoCaixa, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
 import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv } from "@/lib/fechamento-impresso";
 
@@ -122,6 +123,13 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
   const diff = arrecadado - esperado;
   const admin = veResultadoCaixa(state.currentUser);
   const { situacao, semPonto } = situacaoPonto(state, t);
+  const [perguntando, setPerguntando] = useState(false);
+  // O que já foi lançado de consumo e descarte no turno (mostrado na pergunta final para ninguém esquecer)
+  const lancados = (campo: "consumo" | "consumoEst" | "descarte") => products
+    .map((p) => ({ p, q: t.items[p.id]?.[campo] || 0 }))
+    .filter(({ q }) => q > 0)
+    .map(({ p, q }) => `${p.decimal ? String(q).replace(".", ",") : q}x ${p.name}`);
+  const consumoLancado = lancados("consumo"), consumoBarraca = lancados("consumoEst"), descarteLancado = lancados("descarte");
 
   const closeShift = () => {
     if (semPonto.length > 0) {
@@ -165,11 +173,28 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       alert(`Preencha todos os campos do caixa (menu Turno → Caixa) antes de fechar.\n\nAinda faltam:\n${naoPreenchidos.map((l) => `• ${l}`).join("\n")}`);
       return;
     }
-    if (confirm("Fechar turno?\n\nConfirme que você PAROU AS VENDAS e, no mesmo momento, contou as sobras, leu as maquininhas e contou o dinheiro e as moedas.\n\nDepois de fechar não dá mais para editar aqui (o dono pode editar depois).")) {
-      dispatch({ type: "CLOSE_SHIFT" });
-      onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
-    }
+    // Última pergunta (Sim/Não): consumo e descarte esquecidos mudam o resultado do fechamento
+    setPerguntando(true);
   };
+
+  const confirmarFechamento = () => {
+    setPerguntando(false);
+    dispatch({ type: "CLOSE_SHIFT" });
+    onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
+  };
+
+  const vouLancar = () => {
+    setPerguntando(false);
+    // Leva até os botões de consumo e descarte (menu Ponto)
+    setTimeout(() => document.getElementById("lancar-consumo-descarte")?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+  };
+
+  const listaLancados = (rotulo: string, itens: string[], vazio: string) => (
+    <div>
+      <span className="font-semibold">{rotulo}: </span>
+      {itens.length > 0 ? <span>{itens.join(", ")}</span> : <span className="text-warning font-semibold">{vazio}</span>}
+    </div>
+  );
 
   return (
     <div className="bg-card border border-border rounded-xl p-3 space-y-2">
@@ -222,6 +247,29 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       )}
 
       <Button className="w-full" onClick={closeShift}>Fechar turno</Button>
+      <Dialog open={perguntando} onOpenChange={setPerguntando}>
+        <DialogContent className="max-w-[420px]">
+          <DialogHeader><DialogTitle>Antes de fechar o turno</DialogTitle></DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="bg-background border border-border rounded-lg p-2.5 space-y-1 text-xs">
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wide">Já lançado neste turno</div>
+              {listaLancados("Consumo dos funcionários", consumoLancado, "nenhum lançado")}
+              {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
+              {listaLancados("Descarte", descarteLancado, "nenhum lançado")}
+            </div>
+            <p className="font-semibold">
+              Todo o CONSUMO (de cada funcionário e da barraca) e todos os DESCARTES (pastel que caiu, queimou ou estragou) deste turno já foram lançados?
+            </p>
+            <p className="text-xs text-muted-foreground">
+              O que não for lançado muda o resultado do fechamento. Lembre também: pare as vendas e conte sobras, maquininhas e dinheiro no mesmo momento.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={vouLancar}>Não, vou lançar</Button>
+              <Button onClick={confirmarFechamento}>Sim, fechar turno</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <button
         onClick={() => confirm("Descartar este turno sem salvar?") && dispatch({ type: "DISCARD_SHIFT" })}
         className="w-full text-xs text-muted-foreground py-2 hover:text-destructive">
