@@ -13,6 +13,7 @@ import { baixarCsv } from "@/lib/csv";
 import { Trash2 } from "lucide-react";
 import type { Category, Product } from "@/lib/products";
 import { useFiltro } from "@/lib/filtros";
+import { PeriodoComSemana } from "@/components/PeriodoComSemana";
 
 type ProdutosTab = Category | "consumo";
 
@@ -222,16 +223,7 @@ function ConsumoFuncionarios({ products }: { products: ReturnType<typeof getAllP
   return (
     <div className="p-3 space-y-2">
       <div className="bg-card border border-border rounded-xl p-3 space-y-2">
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-muted-foreground">De</label>
-            <div className="mt-1"><DatePickerBR value={from} onChange={setFrom} /></div>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Até</label>
-            <div className="mt-1"><DatePickerBR value={to} onChange={setTo} /></div>
-          </div>
-        </div>
+        <PeriodoComSemana from={from} to={to} setFrom={setFrom} setTo={setTo} />
         <div>
           <label className="text-xs text-muted-foreground">Funcionário</label>
           <select

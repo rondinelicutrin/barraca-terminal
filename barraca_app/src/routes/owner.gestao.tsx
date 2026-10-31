@@ -17,6 +17,8 @@ import {
   type ModoAgrupar,
 } from "@/lib/gestao";
 import { useFiltro } from "@/lib/filtros";
+import { ehSemanaInteira, NavegarSemana } from "@/components/PeriodoComSemana";
+import { inicioSemana, fimSemana } from "@/lib/folha";
 
 export const Route = createFileRoute("/owner/gestao")({
   component: GestaoPage,
@@ -52,7 +54,7 @@ function GestaoPage() {
 
   const preset = (p: "hoje" | "7" | "mes" | "ano" | "tudo") => {
     if (p === "hoje") { setFrom(hoje); setTo(hoje); }
-    else if (p === "7") { setFrom(addDias(hoje, -6)); setTo(hoje); }
+    else if (p === "7") { const seg = inicioSemana(hoje); setFrom(seg); setTo(fimSemana(seg)); } // semana de segunda a domingo
     else if (p === "mes") { setFrom(hoje.slice(0, 7) + "-01"); setTo(hoje); }
     else if (p === "ano") { setFrom(hoje.slice(0, 4) + "-01-01"); setTo(hoje); }
     else {
@@ -226,10 +228,12 @@ function GestaoPage() {
             </div>
           </div>
           <div className="flex gap-1.5 flex-wrap">
-            {([["hoje", "Hoje"], ["7", "7 dias"], ["mes", "Este mês"], ["ano", "Este ano"], ["tudo", "Tudo"]] as const).map(([k, l]) => (
-              <button key={k} onClick={() => preset(k)} className="px-3 h-9 rounded-full text-xs bg-background border border-border text-muted-foreground hover:text-primary">{l}</button>
+            {([["hoje", "Hoje"], ["7", "7 dias (seg a dom)"], ["mes", "Este mês"], ["ano", "Este ano"], ["tudo", "Tudo"]] as const).map(([k, l]) => (
+              <button key={k} onClick={() => preset(k)}
+                className={`px-3 h-9 rounded-full text-xs border ${k === "7" && ehSemanaInteira(from, to) ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border text-muted-foreground hover:text-primary"}`}>{l}</button>
             ))}
           </div>
+          <NavegarSemana from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
         </div>
 
         <div className="grid grid-cols-2 gap-2">

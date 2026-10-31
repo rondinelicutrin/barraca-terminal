@@ -364,6 +364,21 @@ async function sincronizarFuncionario(a: Action) {
 
 // Busca linhas de uma tabela filha em lotes de ids e com paginação (.range), porque o Supabase/PostgREST
 // devolve no máximo 1000 linhas por requisição — sem isso, itens de turnos antigos eram descartados em silêncio.
+// O Supabase devolve no máximo 1000 linhas por consulta: sem paginar, os registros mais antigos
+// (pontos com consumo, turnos fechados) sumiam do app quando a tabela passava desse tamanho.
+async function buscarTodos(
+  consulta: () => any, // nova consulta a cada página (select + filtros + ordem)
+): Promise<{ data: any[]; error: any }> {
+  const PAG = 1000;
+  const out: any[] = [];
+  for (let de = 0; ; de += PAG) {
+    const { data, error } = await consulta().range(de, de + PAG - 1);
+    if (error) return { data: out, error };
+    out.push(...(data ?? []));
+    if (!data || data.length < PAG) return { data: out, error: null };
+  }
+}
+
 async function buscarEmLotes(tabela: string, coluna: string, ids: string[]): Promise<any[]> {
   const out: any[] = [];
   const LOTE = 10, PAG = 1000;
@@ -957,10 +972,10 @@ function reducer(s: State, a: Action): State {
   return n;
 }
 
-const ORDEM_TURNO: Record<string, number> = { manha: 0, tarde: 1, noite: 2 };
+const ORDEM_TURNO: Record<string, number> = { noite: 0, tarde: 1, manha: 2 };
 
 // Ordem de exibição dos fechamentos: data mais recente primeiro e, dentro do mesmo dia,
-// Manhã → Tarde → Noite.
+// o último fechamento primeiro: Noite → Tarde → Manhã.
 export function ordenarTurnos<T extends { date: string; shift: string }>(lista: T[]): T[] {
   return [...lista].sort((a, b) => b.date.localeCompare(a.date) || (ORDEM_TURNO[a.shift] ?? 9) - (ORDEM_TURNO[b.shift] ?? 9));
 }
@@ -1850,8 +1865,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           turnoAtivo = turnoFromRow(row, items);
         }
 
-        const { data: histRows, error: errHist } = await supabase
-          .from("turnos").select("*").not("closed_at", "is", null).order("date", { ascending: false });
+        const { data: histRows, error: errHist } = await buscarTodos(() => supabase
+          .from("turnos").select("*").not("closed_at", "is", null).order("date", { ascending: false }).order("id"));
         if (errHist) throw errHist;
         let historico: Turno[] = [];
         if (histRows && histRows.length > 0) {
@@ -1893,8 +1908,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // 4) Carrega os registros de ponto (e o consumo de cada um) do Supabase
     (async () => {
       await filaEnviada;
-      const { data: pontoRows, error: errPontos } = await supabase
-        .from("pontos").select("*").order("date", { ascending: false });
+      const { data: pontoRows, error: errPontos } = await buscarTodos(() => supabase
+        .from("pontos").select("*").order("date", { ascending: false }).order("id"));
       if (errPontos) {
         // eslint-disable-next-line no-console
         console.error("Não foi possível carregar os pontos do Supabase:", errPontos);
