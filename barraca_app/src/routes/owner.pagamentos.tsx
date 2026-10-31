@@ -11,6 +11,7 @@ import { gerarRelatorioPdf } from "@/lib/pdf";
 import { baixarCsv } from "@/lib/csv";
 import { Trash2 } from "lucide-react";
 import { useFiltro } from "@/lib/filtros";
+import { PeriodoComSemana } from "@/components/PeriodoComSemana";
 
 export const Route = createFileRoute("/owner/pagamentos")({
   component: PagamentosPage,
@@ -162,15 +163,8 @@ function PagamentosPage() {
       <TopBar title="Pagamentos" right={<button onClick={() => nav({ to: "/owner" })} className="text-xs text-muted-foreground">Voltar</button>} />
 
       <div className="p-3 space-y-3">
-        <div className="bg-card border border-border rounded-xl p-3 grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-muted-foreground">De</label>
-            <div className="mt-1"><DatePickerBR value={from} onChange={setFrom} /></div>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Até</label>
-            <div className="mt-1"><DatePickerBR value={to} onChange={setTo} /></div>
-          </div>
+        <div className="bg-card border border-border rounded-xl p-3">
+          <PeriodoComSemana from={from} to={to} setFrom={setFrom} setTo={setTo} />
         </div>
 
         <div className="grid grid-cols-2 gap-2">

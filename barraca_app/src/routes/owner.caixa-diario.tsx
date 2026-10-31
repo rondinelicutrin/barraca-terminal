@@ -4,11 +4,11 @@ import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, nomeMaquina } from "@/lib/store";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { DatePickerBR } from "@/components/ui/date-picker-br";
 import { baixarExcel } from "@/lib/excel";
 import { gerarRelatorioPdf } from "@/lib/pdf";
 import { baixarCsv } from "@/lib/csv";
 import { useFiltro } from "@/lib/filtros";
+import { PeriodoComSemana } from "@/components/PeriodoComSemana";
 
 export const Route = createFileRoute("/owner/caixa-diario")({
   component: CaixaDiario,
@@ -137,15 +137,8 @@ function CaixaDiario() {
     <Shell>
       <TopBar title="Caixa final diário" right={<button onClick={() => nav({ to: "/owner" })} className="text-xs text-muted-foreground">Voltar</button>} />
       <div className="p-3 space-y-3">
-        <div className="bg-card border border-border rounded-xl p-3 grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-muted-foreground">De</label>
-            <div className="mt-1"><DatePickerBR value={from} onChange={setFrom} /></div>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Até</label>
-            <div className="mt-1"><DatePickerBR value={to} onChange={setTo} /></div>
-          </div>
+        <div className="bg-card border border-border rounded-xl p-3">
+          <PeriodoComSemana from={from} to={to} setFrom={setFrom} setTo={setTo} />
         </div>
         <p className="text-[11px] text-muted-foreground">
           Soma manhã + tarde + noite de cada dia: dinheiro malote, pix manual, maquininha 1, maquininha 2, esperado
