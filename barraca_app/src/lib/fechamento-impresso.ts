@@ -123,6 +123,11 @@ const numeradas = () => {
   return (t: string) => `${++n}- ${t}`;
 };
 const AVISO_AS_CEGAS = "Resultado do caixa (esperado x arrecadado) conferido pelo administrador.";
+// Versão do funcionário: só a FALTA é sinalizada (sem valores). Caixa certo ou com sobra não mostram nada
+// diferente, para não revelar quando "sobrou". Só sai depois de fechado (valores já travados).
+export const temFaltaNoCaixa = (diferenca: number) => diferenca <= -0.5;
+export const ALERTA_FALTA = ["ATENÇÃO: o caixa deste turno apresentou FALTA.",
+  "Confira dinheiro, moedas, pix, maquininhas, consumo e descarte e procure o administrador."];
 
 function cabecalhoLinhas(f: FechamentoImpresso): string[] {
   const r = f.base;
@@ -204,7 +209,25 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
     doc.setFillColor(235, 235, 235); doc.rect(M, y - 9, meia, 12, "F");
     texto(sec("Dinheiro, moedas e pix"), M + 4, y, { bold: true, size: 9 });
     for (const [k, v] of r.caixa) { linhaKV(k, reais(v), M, meia, y1); y1 += lh; }
-    for (const l of doc.splitTextToSize(textoParaPdf(AVISO_AS_CEGAS), meia - 8) as string[]) { texto(l, x2 + 4, y2, { cor: 110 }); y2 += lh; }
+    if (temFaltaNoCaixa(r.diferenca)) {
+      // Caixa vermelho com triângulo de alerta (a fonte do PDF não tem o símbolo ⚠, então ele é desenhado)
+      const linhas = ALERTA_FALTA.flatMap((t) => doc.splitTextToSize(textoParaPdf(t), meia - 40) as string[]);
+      const alt = 10 + linhas.length * (fs + 3);
+      doc.setFillColor(253, 236, 236); doc.setDrawColor(200, 40, 40); doc.setLineWidth(1);
+      doc.roundedRect(x2, y - 9, meia, alt, 3, 3, "FD"); doc.setLineWidth(0.57);
+      const tx = x2 + 8, ty = y - 9 + alt / 2;
+      doc.setFillColor(200, 40, 40); doc.triangle(tx, ty + 8, tx + 18, ty + 8, tx + 9, ty - 8, "F");
+      doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.text("!", tx + 9, ty + 6, { align: "center" });
+      let yy = y - 9 + 5 + fs + 1;
+      linhas.forEach((l, i) => {
+        doc.setFont("helvetica", i === 0 ? "bold" : "normal"); doc.setFontSize(fs + (i === 0 ? 0.5 : 0)); doc.setTextColor(170, 20, 20);
+        doc.text(l, x2 + 34, yy); yy += fs + 3;
+      });
+      doc.setTextColor(0);
+      y2 = y - 9 + alt + 6;
+    } else {
+      for (const l of doc.splitTextToSize(textoParaPdf(AVISO_AS_CEGAS), meia - 8) as string[]) { texto(l, x2 + 4, y2, { cor: 110 }); y2 += lh; }
+    }
   }
   y = Math.max(y1, y2) + 6;
 
@@ -289,7 +312,10 @@ export function linhasFechamentoCsv(f: FechamentoImpresso): (string | number)[][
       [sec("RESULTADO DO TURNO"), "Valor (R$)"],
       ["Esperado", v(r.esperado)], ["Arrecadado", v(r.arrecadado)], ["Diferença", v(r.diferenca)], ["Situação", s(r.situacao)],
       [],
-    ] : [[AVISO_AS_CEGAS], []]),
+    ] : [
+      ...(temFaltaNoCaixa(r.diferenca) ? [[`⚠ ${ALERTA_FALTA[0]}`], [ALERTA_FALTA[1]]] : [[AVISO_AS_CEGAS]]),
+      [],
+    ]),
     [sec("DINHEIRO, MOEDAS E PIX"), "Valor (R$)"],
     ...r.caixa.map(([k, x]) => [k, v(x)]),
     [],

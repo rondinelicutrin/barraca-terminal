@@ -6,7 +6,7 @@ import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
-import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv } from "@/lib/fechamento-impresso";
+import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA } from "@/lib/fechamento-impresso";
 
 // Campos do caixa que precisam estar preenchidos (aceita 0) antes de fechar o turno.
 // Todos os campos de cada maquininha em uso são obrigatórios: no turno da noite os dois valores
@@ -264,7 +264,7 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
               O que não for lançado muda o resultado do fechamento. Lembre também: pare as vendas e conte sobras, maquininhas e dinheiro no mesmo momento.
             </p>
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={vouLancar}>Não, vou lançar</Button>
+              <Button variant="secondary" onClick={vouLancar}>Lançar consumo/descarte</Button>
               <Button onClick={confirmarFechamento}>Sim, fechar turno</Button>
             </div>
           </div>
@@ -308,6 +308,16 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
           </div>
         </div>
 
+        {/* Funcionário: só a falta é sinalizada, sem valores (caixa certo ou com sobra não mostram nada) */}
+        {!veResultadoCaixa(state.currentUser) && temFaltaNoCaixa(rel.diferenca) && (
+          <div role="alert" className="bg-destructive/10 border-2 border-destructive rounded-xl p-3 flex gap-3 items-start">
+            <div className="text-2xl leading-none">⚠️</div>
+            <div className="text-sm">
+              <div className="font-bold text-destructive">{ALERTA_FALTA[0]}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{ALERTA_FALTA[1]}</div>
+            </div>
+          </div>
+        )}
         {veResultadoCaixa(state.currentUser) && (
         <div className="bg-card border border-border rounded-xl p-3 space-y-1">
           <div className="text-sm font-medium mb-1">Resultado do turno</div>
