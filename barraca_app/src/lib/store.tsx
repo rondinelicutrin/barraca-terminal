@@ -100,6 +100,10 @@ export function ehSoConsumo(p: Pick<Ponto, "entrada" | "saida" | "transporte" | 
 // Usuário comparado sem espaços nas pontas e sem diferença de maiúsculas/minúsculas
 export const normalizarUsuario = (u: string) => u.trim().toLowerCase();
 
+// Fechamento às cegas: só o dono e os administradores veem o resultado do caixa (esperado, arrecadado,
+// diferença) e os valores em R$ das vendas. O funcionário só conta e lança, sem saber quanto "deveria dar".
+export const veResultadoCaixa = (u: { role: string } | null | undefined) => u?.role === "owner";
+
 // Quem usa as telas de Turno e Ponto: funcionários e também os funcionários cadastrados como
 // Administrador (que além disso têm o Painel). O usuário "dono" fica só no Painel.
 export const usaTurnoEPonto = (u: { role: string; username: string } | null | undefined) =>
@@ -1216,10 +1220,11 @@ export function arrecadadoTurno(t: Turno): number {
   const c = t.caixa;
   const maq1 = realMaq(c.maq1, t.shift);
   const maq2 = c.maq2Ativa ? realMaq(c.maq2, t.shift) : 0;
-  // dinheiro = dinheiroFinal - malote (o que entrou de dinheiro no turno)
-  // moedas = moedasFinal - moedasInicial (variação)
-  const dinheiro = Math.max(0, (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0));
-  const moedas   = Math.max(0, (c.moedasFinal || 0) - (c.moedasInicial || 0));
+  // dinheiro = dinheiro final − dinheiro do caixa anterior (o que entrou de dinheiro no turno)
+  // moedas = moedas final − moedas inicial (variação)
+  // Podem ser negativos (ex.: moedas usadas de troco): antes eram travados em zero e a falta sumia.
+  const dinheiro = (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0);
+  const moedas   = (c.moedasFinal || 0) - (c.moedasInicial || 0);
   return dinheiro + moedas + (c.pix || 0) + (c.voucher || 0) + maq1 + maq2;
 }
 
@@ -1238,8 +1243,8 @@ export function resumoPagamentos(historico: Turno[], from: string, to: string): 
   for (const t of historico) {
     if (t.date < from || t.date > to) continue;
     const c = t.caixa;
-    r.dinheiro += Math.max(0, (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0));
-    r.moedas   += Math.max(0, (c.moedasFinal || 0) - (c.moedasInicial || 0));
+    r.dinheiro += (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0);
+    r.moedas   += (c.moedasFinal || 0) - (c.moedasInicial || 0);
     r.pix      += c.pix || 0;
     r.voucher  += c.voucher || 0;
     r.maq1Bruto += realMaq(c.maq1, t.shift);
