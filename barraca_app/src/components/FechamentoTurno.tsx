@@ -1,11 +1,12 @@
-import { useMemo } from "react";
-import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
+import { useMemo, useState } from "react";
+import { useStore, veResultadoCaixa, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
-import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv } from "@/lib/fechamento-impresso";
+import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA } from "@/lib/fechamento-impresso";
 
 // Campos do caixa que precisam estar preenchidos (aceita 0) antes de fechar o turno.
 // Todos os campos de cada maquininha em uso são obrigatórios: no turno da noite os dois valores
@@ -34,7 +35,8 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
 export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
   const { state } = useStore();
   const gerar = (formato: "pdf" | "csv") => {
-    const f = montarFechamentoImpresso(turno, state);
+    // Funcionário comum baixa a versão às cegas (sem resultado e sem valores de venda)
+    const f = montarFechamentoImpresso(turno, state, veResultadoCaixa(state.currentUser));
     if (formato === "pdf") baixarFechamentoPdf(f);
     else baixarFechamentoCsv(f);
   };
@@ -119,7 +121,15 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
   const arrecadado = useMemo(() => (t ? arrecadadoTurno(t) : 0), [t]);
   if (!t) return null;
   const diff = arrecadado - esperado;
+  const admin = veResultadoCaixa(state.currentUser);
   const { situacao, semPonto } = situacaoPonto(state, t);
+  const [perguntando, setPerguntando] = useState(false);
+  // O que já foi lançado de consumo e descarte no turno (mostrado na pergunta final para ninguém esquecer)
+  const lancados = (campo: "consumo" | "consumoEst" | "descarte") => products
+    .map((p) => ({ p, q: t.items[p.id]?.[campo] || 0 }))
+    .filter(({ q }) => q > 0)
+    .map(({ p, q }) => `${p.decimal ? String(q).replace(".", ",") : q}x ${p.name}`);
+  const consumoLancado = lancados("consumo"), consumoBarraca = lancados("consumoEst"), descarteLancado = lancados("descarte");
 
   const closeShift = () => {
     if (semPonto.length > 0) {
@@ -163,17 +173,41 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       alert(`Preencha todos os campos do caixa (menu Turno → Caixa) antes de fechar.\n\nAinda faltam:\n${naoPreenchidos.map((l) => `• ${l}`).join("\n")}`);
       return;
     }
-    if (confirm("Fechar turno? Não poderá mais editar campos aqui (o dono pode editar depois).")) {
-      dispatch({ type: "CLOSE_SHIFT" });
-      onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
-    }
+    // Última pergunta (Sim/Não): consumo e descarte esquecidos mudam o resultado do fechamento
+    setPerguntando(true);
   };
+
+  const confirmarFechamento = () => {
+    setPerguntando(false);
+    dispatch({ type: "CLOSE_SHIFT" });
+    onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
+  };
+
+  const vouLancar = () => {
+    setPerguntando(false);
+    // Leva até os botões de consumo e descarte (menu Ponto)
+    setTimeout(() => document.getElementById("lancar-consumo-descarte")?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+  };
+
+  const listaLancados = (rotulo: string, itens: string[], vazio: string) => (
+    <div>
+      <span className="font-semibold">{rotulo}: </span>
+      {itens.length > 0 ? <span>{itens.join(", ")}</span> : <span className="text-warning font-semibold">{vazio}</span>}
+    </div>
+  );
 
   return (
     <div className="bg-card border border-border rounded-xl p-3 space-y-2">
       <div className="text-sm font-semibold">Fechar o turno</div>
       <div className="text-[11px] text-muted-foreground">
         {t.date.split("-").reverse().join("/")} · {t.shift === "manha" ? "Manhã" : t.shift === "tarde" ? "Tarde" : "Noite"}
+      </div>
+      {/* Venda feita na troca de turno caía no estoque de um turno e no dinheiro do outro (falta num, sobra no outro) */}
+      <div role="note" className="text-xs bg-warning/10 border border-warning/50 rounded-lg p-2 space-y-0.5">
+        <div className="font-semibold">⏸️ Antes de fechar: pare as vendas</div>
+        <div className="text-muted-foreground">
+          No mesmo momento: conte as sobras, leia as maquininhas e conte o dinheiro e as moedas. Só depois a próxima pessoa abre o turno dela.
+        </div>
       </div>
 
       <div className="space-y-1">
@@ -192,6 +226,11 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
         </p>
       )}
 
+      {!admin ? (
+        <p className="border-t border-border pt-2 text-xs text-muted-foreground text-center">
+          🔒 Confira se lançou tudo certo. O resultado do caixa é conferido pelo administrador.
+        </p>
+      ) : (
       <div className="border-t border-border pt-2 space-y-1">
         <Row label="Esperado"   value={BRL(esperado)} />
         <Row label="Arrecadado" value={BRL(arrecadado)} />
@@ -205,8 +244,32 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
               : <span className="text-destructive">⚠ Faltam {BRL(-diff)}</span>}
         </div>
       </div>
+      )}
 
       <Button className="w-full" onClick={closeShift}>Fechar turno</Button>
+      <Dialog open={perguntando} onOpenChange={setPerguntando}>
+        <DialogContent className="max-w-[420px]">
+          <DialogHeader><DialogTitle>Antes de fechar o turno</DialogTitle></DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="bg-background border border-border rounded-lg p-2.5 space-y-1 text-xs">
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wide">Já lançado neste turno</div>
+              {listaLancados("Consumo dos funcionários", consumoLancado, "nenhum lançado")}
+              {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
+              {listaLancados("Descarte", descarteLancado, "nenhum lançado")}
+            </div>
+            <p className="font-semibold">
+              Todo o CONSUMO (de cada funcionário e da barraca) e todos os DESCARTES (pastel que caiu, queimou ou estragou) deste turno já foram lançados?
+            </p>
+            <p className="text-xs text-muted-foreground">
+              O que não for lançado muda o resultado do fechamento. Lembre também: pare as vendas e conte sobras, maquininhas e dinheiro no mesmo momento.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={vouLancar}>Lançar consumo/descarte</Button>
+              <Button onClick={confirmarFechamento}>Sim, fechar turno</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <button
         onClick={() => confirm("Descartar este turno sem salvar?") && dispatch({ type: "DISCARD_SHIFT" })}
         className="w-full text-xs text-muted-foreground py-2 hover:text-destructive">
@@ -245,6 +308,17 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
           </div>
         </div>
 
+        {/* Funcionário: só a falta é sinalizada, sem valores (caixa certo ou com sobra não mostram nada) */}
+        {!veResultadoCaixa(state.currentUser) && temFaltaNoCaixa(rel.diferenca) && (
+          <div role="alert" className="bg-destructive/10 border-2 border-destructive rounded-xl p-3 flex gap-3 items-start">
+            <div className="text-2xl leading-none">⚠️</div>
+            <div className="text-sm">
+              <div className="font-bold text-destructive">{ALERTA_FALTA[0]}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{ALERTA_FALTA[1]}</div>
+            </div>
+          </div>
+        )}
+        {veResultadoCaixa(state.currentUser) && (
         <div className="bg-card border border-border rounded-xl p-3 space-y-1">
           <div className="text-sm font-medium mb-1">Resultado do turno</div>
           <Row label="Esperado" value={BRL(rel.esperado)} />
@@ -253,6 +327,7 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
             valueClass={Math.abs(rel.diferenca) < 0.5 ? "text-success" : rel.diferenca > 0 ? "text-warning" : "text-destructive"} />
           <div className="text-center text-sm pt-1">{rel.situacao}</div>
         </div>
+        )}
 
         <div className="bg-card border border-border rounded-xl p-3">
           <div className="text-sm font-medium">🧾 Vendidos no turno</div>
@@ -302,8 +377,9 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
         <div className="bg-card border border-border rounded-xl p-3 space-y-2">
           <div className="text-sm font-medium">Relatório do fechamento (caixa, maquininhas, consumos e sobras)</div>
           <p className="text-[11px] text-muted-foreground">
-            Inclui entradas e vendidos de cada produto, dinheiro, moedas, pix, maquininhas (valor anterior e lançado), consumos, esperado × arrecadado,
-            sobras de todos os produtos e quem fechou o turno. Gere o arquivo e envie para o dono.
+            {veResultadoCaixa(state.currentUser)
+              ? "Inclui o resultado (esperado × arrecadado), dinheiro, moedas, pix, maquininhas, vendidos de cada produto com os valores e o consumo dos funcionários."
+              : "Inclui dinheiro, moedas, pix, maquininhas, entrada, sobra e vendidos de cada produto e o consumo. Gere o arquivo e envie para o dono."}
           </p>
           <RelatorioSobrasBotoes turno={turno} />
         </div>
