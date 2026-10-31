@@ -125,7 +125,9 @@ const numeradas = () => {
 const AVISO_AS_CEGAS = "Resultado do caixa (esperado x arrecadado) conferido pelo administrador.";
 // Versão do funcionário: só a FALTA é sinalizada (sem valores). Caixa certo ou com sobra não mostram nada
 // diferente, para não revelar quando "sobrou". Só sai depois de fechado (valores já travados).
-export const temFaltaNoCaixa = (diferenca: number) => diferenca <= -0.5;
+// Tolerância definida pelo dono: só alerta faltas acima de R$ 5,00.
+export const LIMITE_ALERTA_FALTA = 5;
+export const temFaltaNoCaixa = (diferenca: number) => diferenca < -LIMITE_ALERTA_FALTA - 0.005;
 export const ALERTA_FALTA = ["ATENÇÃO: o caixa deste turno apresentou FALTA.",
   "Confira dinheiro, moedas, pix, maquininhas, consumo e descarte e procure o administrador."];
 
