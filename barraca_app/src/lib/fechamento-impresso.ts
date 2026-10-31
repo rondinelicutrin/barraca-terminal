@@ -9,6 +9,9 @@ import { baixarCsv } from "./csv";
 // Fechamento geral do turno, no formato pedido pelo dono, em UMA folha (PDF e CSV):
 // 1- Resultado · 2- Dinheiro, moedas e pix · 3- Maquininhas · 4- Vendidos no turno (produto a produto)
 // · 5- Consumo dos funcionários.
+// Versão do funcionário (fechamento às cegas): sem o resultado do caixa e sem nenhum valor em R$ de vendas
+// (sem a coluna Valor R$, os totais em R$ e o valor do consumo). Assim quem fecha não sabe se o caixa "sobrou"
+// e não tem como ajustar a gaveta; o resultado completo fica só para o dono e os administradores.
 
 export interface LinhaProduto {
   produto: string;
@@ -33,6 +36,7 @@ export interface FechamentoImpresso {
   totalVendido: number;            // soma da coluna Valor R$
   consumoFuncionarios: ConsumoPessoa[];
   arquivoBase: string;
+  completo: boolean;               // false = versão do funcionário (às cegas)
 }
 
 const GRUPOS: { titulo: string; filtro: (p: Product) => boolean; totalPasteis?: boolean; simples?: boolean }[] = [
@@ -43,7 +47,7 @@ const GRUPOS: { titulo: string; filtro: (p: Product) => boolean; totalPasteis?: 
   { titulo: "Outros", filtro: (p) => p.category === "outros" },
 ];
 
-export function montarFechamentoImpresso(turno: Turno, state: State): FechamentoImpresso {
+export function montarFechamentoImpresso(turno: Turno, state: State, completo = true): FechamentoImpresso {
   const products = getAllProducts(state);
   const base = montarRelatorioSobras(turno, products, state.funcionarios, state.taxasMaquininha);
   let totalVendido = 0;
@@ -96,7 +100,7 @@ export function montarFechamentoImpresso(turno: Turno, state: State): Fechamento
 
   return {
     base, turnoNome: shiftLabel(turno.shift).replace(/^[^\p{L}]+/u, ""), grupos, totalVendido, consumoFuncionarios,
-    arquivoBase: `fechamento-${turno.date}-${turno.shift}`,
+    arquivoBase: `fechamento-${turno.date}-${turno.shift}`, completo,
   };
 }
 
@@ -107,11 +111,18 @@ const qtd = (n: number | null, decimal?: boolean) =>
   n == null ? "-" : decimal || !Number.isInteger(n) ? n.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : String(n);
 const reais = (n: number | null) => (n == null ? "-" : BRL(n).replace(/ /g, " "));
 const sinal = (n: number) => `${n > 0.005 ? "+" : ""}${reais(n)}`;
-const linhaColunas = (l: LinhaProduto) => [
+const linhaColunas = (l: LinhaProduto, completo: boolean) => [
   qtd(l.entrada, l.decimal), qtd(l.chegada, l.decimal), qtd(l.sobra, l.decimal), qtd(l.consumo, l.decimal),
-  qtd(l.descarte, l.decimal), qtd(l.total, l.decimal), qtd(l.vendidos, l.decimal), reais(l.valor),
+  qtd(l.descarte, l.decimal), qtd(l.total, l.decimal), qtd(l.vendidos, l.decimal), ...(completo ? [reais(l.valor)] : []),
 ];
 export const COLUNAS_VENDIDOS = ["Produtos", "Entrada", "Chegada", "Sobras", "Consumo", "Descarte", "Total", "Vendidos", "Valor R$"];
+const colunasVendidos = (completo: boolean) => (completo ? COLUNAS_VENDIDOS : COLUNAS_VENDIDOS.slice(0, -1));
+// Numeração das seções: na versão do funcionário não existe a seção do resultado
+const numeradas = () => {
+  let n = 0;
+  return (t: string) => `${++n}- ${t}`;
+};
+const AVISO_AS_CEGAS = "Resultado do caixa (esperado x arrecadado) conferido pelo administrador.";
 
 function cabecalhoLinhas(f: FechamentoImpresso): string[] {
   const r = f.base;
@@ -171,26 +182,34 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   for (const l of cabecalhoLinhas(f)) { texto(l, M, y, { size: 9, cor: 60 }); y += 11; }
   y += 6;
 
-  // 1 e 2 lado a lado
+  const sec = numeradas();
+  // 1 e 2 lado a lado (na versão do funcionário: dinheiro à esquerda e o aviso à direita)
   const meia = (larg - 14) / 2, x2 = M + meia + 14;
   const linhaKV = (k: string, v: string, x: number, w: number, yy: number, bold = false) => {
     texto(k, x + 4, yy, { bold }); texto(v, x + w - 4, yy, { align: "right", bold });
   };
-  doc.setFillColor(235, 235, 235); doc.rect(M, y - 9, meia, 12, "F"); doc.rect(x2, y - 9, meia, 12, "F");
-  texto("1- Resultado do turno", M + 4, y, { bold: true, size: 9 });
-  texto("2- Dinheiro, moedas e pix", x2 + 4, y, { bold: true, size: 9 });
   let y1 = y + 12, y2 = y + 12;
-  linhaKV("Esperado", reais(r.esperado), M, meia, y1); y1 += lh;
-  linhaKV("Arrecadado", reais(r.arrecadado), M, meia, y1); y1 += lh;
-  linhaKV("Diferença", sinal(r.diferenca), M, meia, y1, true); y1 += lh;
-  const corSituacao: [number, number, number] = Math.abs(r.diferenca) < 0.5 ? [30, 130, 70] : r.diferenca > 0 ? [190, 120, 0] : [200, 40, 40];
-  doc.setFont("helvetica", "bold"); doc.setFontSize(fs); doc.setTextColor(...corSituacao);
-  doc.text(textoParaPdf(r.situacao), M + 4, y1); doc.setTextColor(0); y1 += lh;
-  for (const [k, v] of r.caixa) { linhaKV(k, reais(v), x2, meia, y2); y2 += lh; }
+  if (f.completo) {
+    doc.setFillColor(235, 235, 235); doc.rect(M, y - 9, meia, 12, "F"); doc.rect(x2, y - 9, meia, 12, "F");
+    texto(sec("Resultado do turno"), M + 4, y, { bold: true, size: 9 });
+    texto(sec("Dinheiro, moedas e pix"), x2 + 4, y, { bold: true, size: 9 });
+    linhaKV("Esperado", reais(r.esperado), M, meia, y1); y1 += lh;
+    linhaKV("Arrecadado", reais(r.arrecadado), M, meia, y1); y1 += lh;
+    linhaKV("Diferença", sinal(r.diferenca), M, meia, y1, true); y1 += lh;
+    const corSituacao: [number, number, number] = Math.abs(r.diferenca) < 0.5 ? [30, 130, 70] : r.diferenca > 0 ? [190, 120, 0] : [200, 40, 40];
+    doc.setFont("helvetica", "bold"); doc.setFontSize(fs); doc.setTextColor(...corSituacao);
+    doc.text(textoParaPdf(r.situacao), M + 4, y1); doc.setTextColor(0); y1 += lh;
+    for (const [k, v] of r.caixa) { linhaKV(k, reais(v), x2, meia, y2); y2 += lh; }
+  } else {
+    doc.setFillColor(235, 235, 235); doc.rect(M, y - 9, meia, 12, "F");
+    texto(sec("Dinheiro, moedas e pix"), M + 4, y, { bold: true, size: 9 });
+    for (const [k, v] of r.caixa) { linhaKV(k, reais(v), M, meia, y1); y1 += lh; }
+    for (const l of doc.splitTextToSize(textoParaPdf(AVISO_AS_CEGAS), meia - 8) as string[]) { texto(l, x2 + 4, y2, { cor: 110 }); y2 += lh; }
+  }
   y = Math.max(y1, y2) + 6;
 
   // 3- Maquininhas
-  y = titulo("3- Maquininhas", y);
+  y = titulo(sec("Maquininhas"), y);
   const wMaq = larg / maq.colunas.length;
   maq.colunas.forEach((c, i) => texto(c, i === 0 ? M + 4 : M + wMaq * (i + 1) - 4, y, { bold: true, align: i === 0 ? "left" : "right" }));
   y += 3; traco(y); y += lh - 2;
@@ -201,14 +220,15 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   y += 6;
 
   // 4- Vendidos no turno, produto a produto
-  y = titulo(`4- Vendidos no turno (${f.turnoNome})`, y);
-  const wProd = 150, wCol = (larg - wProd) / 8;
+  y = titulo(sec(`Vendidos no turno (${f.turnoNome})`), y);
+  const colunas = colunasVendidos(f.completo);
+  const wProd = 150, wCol = (larg - wProd) / (colunas.length - 1);
   const xCol = (i: number) => (i === 0 ? M + 4 : M + wProd + wCol * i - 4);
-  COLUNAS_VENDIDOS.forEach((c, i) => texto(c, xCol(i), y, { bold: true, align: i === 0 ? "left" : "right" }));
+  colunas.forEach((c, i) => texto(c, xCol(i), y, { bold: true, align: i === 0 ? "left" : "right" }));
   y += 3; traco(y); y += lh - 2;
   const linhaProduto = (l: LinhaProduto, bold = false) => {
     texto(l.produto.length > 34 ? l.produto.slice(0, 33) + "…" : l.produto, xCol(0), y, { bold });
-    linhaColunas(l).forEach((c, i) => texto(c, xCol(i + 1), y, { align: "right", bold, cor: !bold && (c === "0" || c === "-") ? 150 : 0 }));
+    linhaColunas(l, f.completo).forEach((c, i) => texto(c, xCol(i + 1), y, { align: "right", bold, cor: !bold && (c === "0" || c === "-") ? 150 : 0 }));
     y += lh;
   };
   for (const g of f.grupos) {
@@ -217,29 +237,32 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
     y += lh;
     for (const l of g.linhas) linhaProduto(l);
     if (g.total) { traco(y - lh + 2.5); linhaProduto(g.total, true); }
-    if (!g.destaque) continue;
+    if (!g.destaque || !f.completo) continue;
     // Valor em R$ da subcategoria inteira (nos pastéis inclui a casquinha frita)
     if (!g.total) traco(y - lh + 2.5);
     texto(rotuloTotalGrupo(g), xCol(0), y, { bold: true });
     texto(reais(g.valorTotal), xCol(8), y, { bold: true, align: "right" });
     y += lh + 2;
   }
-  traco(y - lh + 2.5);
-  texto("Total vendido em produtos", xCol(0), y, { bold: true });
-  texto(reais(f.totalVendido), xCol(8), y, { bold: true, align: "right" });
-  y += lh + 6;
+  if (f.completo) {
+    traco(y - lh + 2.5);
+    texto("Total vendido em produtos", xCol(0), y, { bold: true });
+    texto(reais(f.totalVendido), xCol(8), y, { bold: true, align: "right" });
+    y += lh;
+  }
+  y += 6;
 
   // 5- Consumo dos funcionários
-  y = titulo("5- Consumo funcionário", y);
+  y = titulo(sec("Consumo funcionário"), y);
   if (f.consumoFuncionarios.length === 0) { texto("Nenhum consumo de funcionário neste turno.", M + 4, y, { cor: 90 }); y += lh; }
   for (const c of f.consumoFuncionarios) {
     texto(c.nome, M + 4, y, { bold: true });
     const itens = doc.splitTextToSize(textoParaPdf(c.itens), larg - 230)[0] as string;
     texto(itens + (itens.length < c.itens.length ? "…" : ""), M + 110, y);
-    texto(reais(c.valor), M + larg - 4, y, { align: "right" });
+    if (f.completo) texto(reais(c.valor), M + larg - 4, y, { align: "right" });
     y += lh;
   }
-  texto(`Gerado em ${new Date().toLocaleString("pt-BR")}`, M, H - M + 8, { size: 6.5, cor: 140 });
+  texto(`Gerado em ${new Date().toLocaleString("pt-BR")}${f.completo ? "" : " · versão do funcionário"}`, M, H - M + 8, { size: 6.5, cor: 140 });
   return doc;
 }
 
@@ -250,33 +273,38 @@ export function linhasFechamentoCsv(f: FechamentoImpresso): (string | number)[][
   const q = (n: number | null) => (n == null ? "" : String(n).replace(".", ","));
   const r = f.base;
   const maq = maquininhasTabela(f);
+  const sec = numeradas();
   const linhas: (string | number)[][] = [
     [`FECHAMENTO GERAL DO TURNO · ${f.turnoNome.toUpperCase()}`],
     ...cabecalhoLinhas(f).map((l) => [s(l)]),
     [],
-    ["1- RESULTADO DO TURNO", "Valor (R$)"],
-    ["Esperado", v(r.esperado)], ["Arrecadado", v(r.arrecadado)], ["Diferença", v(r.diferenca)], ["Situação", s(r.situacao)],
-    [],
-    ["2- DINHEIRO, MOEDAS E PIX", "Valor (R$)"],
+    ...(f.completo ? [
+      [sec("RESULTADO DO TURNO"), "Valor (R$)"],
+      ["Esperado", v(r.esperado)], ["Arrecadado", v(r.arrecadado)], ["Diferença", v(r.diferenca)], ["Situação", s(r.situacao)],
+      [],
+    ] : [[AVISO_AS_CEGAS], []]),
+    [sec("DINHEIRO, MOEDAS E PIX"), "Valor (R$)"],
     ...r.caixa.map(([k, x]) => [k, v(x)]),
     [],
-    ["3- MAQUININHAS", ...maq.colunas.slice(1).map((c) => `${c} (R$)`)],
+    [sec("MAQUININHAS"), ...maq.colunas.slice(1).map((c) => `${c} (R$)`)],
     ...f.base.maquininhas.map((m) => [s(m.nome), v(m.anterior), v(m.lancado), ...(m.apos00 != null ? [v(m.apos00)] : []), v(m.real)]),
     [],
-    [`4- VENDIDOS NO TURNO (${f.turnoNome.toUpperCase()})`],
-    COLUNAS_VENDIDOS,
+    [sec(`VENDIDOS NO TURNO (${f.turnoNome.toUpperCase()})`)],
+    colunasVendidos(f.completo),
   ];
-  const linhaCsv = (l: LinhaProduto) => [s(l.produto), q(l.entrada), q(l.chegada), q(l.sobra), q(l.consumo), q(l.descarte), q(l.total), q(l.vendidos), v(l.valor)];
+  const linhaCsv = (l: LinhaProduto) => [s(l.produto), q(l.entrada), q(l.chegada), q(l.sobra), q(l.consumo), q(l.descarte), q(l.total), q(l.vendidos),
+    ...(f.completo ? [v(l.valor)] : [])];
   for (const g of f.grupos) {
     linhas.push([g.titulo.toUpperCase()]);
     for (const l of g.linhas) linhas.push(linhaCsv(l));
     if (g.total) linhas.push(linhaCsv(g.total));
-    if (g.destaque) linhas.push([rotuloTotalGrupo(g), "", "", "", "", "", "", "", v(g.valorTotal)]);
+    if (g.destaque && f.completo) linhas.push([rotuloTotalGrupo(g), "", "", "", "", "", "", "", v(g.valorTotal)]);
   }
-  linhas.push(["Total vendido em produtos", "", "", "", "", "", "", "", v(f.totalVendido)], []);
-  linhas.push(["5- CONSUMO FUNCIONÁRIO", "Itens", "Valor (R$)"]);
+  if (f.completo) linhas.push(["Total vendido em produtos", "", "", "", "", "", "", "", v(f.totalVendido)]);
+  linhas.push([]);
+  linhas.push(f.completo ? [sec("CONSUMO FUNCIONÁRIO"), "Itens", "Valor (R$)"] : [sec("CONSUMO FUNCIONÁRIO"), "Itens"]);
   if (f.consumoFuncionarios.length === 0) linhas.push(["Nenhum consumo de funcionário neste turno"]);
-  for (const c of f.consumoFuncionarios) linhas.push([s(c.nome), s(c.itens), v(c.valor)]);
+  for (const c of f.consumoFuncionarios) linhas.push(f.completo ? [s(c.nome), s(c.itens), v(c.valor)] : [s(c.nome), s(c.itens)]);
   return linhas;
 }
 

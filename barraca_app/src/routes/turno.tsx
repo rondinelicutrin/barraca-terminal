@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, usaTurnoEPonto, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
+  useStore, usaTurnoEPonto, veResultadoCaixa, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
@@ -417,7 +417,9 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
       <div className="mt-2 flex justify-between items-center text-xs">
         <span className="text-muted-foreground">Vendeu</span>
         <span className="mono font-semibold text-primary">
-          {v == null ? "—" : `${product.decimal ? num(v) : v} · ${BRL(v * (product.saleable ? product.price : 0))}`}
+          {v == null ? "—" : veResultadoCaixa(state.currentUser)
+            ? `${product.decimal ? num(v) : v} · ${BRL(v * (product.saleable ? product.price : 0))}`
+            : `${product.decimal ? num(v) : v}`}
         </span>
       </div>
     </div>
