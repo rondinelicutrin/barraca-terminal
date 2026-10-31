@@ -226,9 +226,16 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   const xCol = (i: number) => (i === 0 ? M + 4 : M + wProd + wCol * i - 4);
   colunas.forEach((c, i) => texto(c, xCol(i), y, { bold: true, align: i === 0 ? "left" : "right" }));
   y += 3; traco(y); y += lh - 2;
+  // Pontilhado bem suave embaixo de cada produto: ajuda a seguir a linha até a coluna no celular
+  const pontilhado = (yy: number) => {
+    doc.setLineDashPattern([0.6, 1.8], 0); doc.setLineWidth(0.4); doc.setDrawColor(190);
+    doc.line(M, yy, M + larg, yy);
+    doc.setLineDashPattern([], 0); doc.setLineWidth(0.57);
+  };
   const linhaProduto = (l: LinhaProduto, bold = false) => {
     texto(l.produto.length > 34 ? l.produto.slice(0, 33) + "…" : l.produto, xCol(0), y, { bold });
     linhaColunas(l, f.completo).forEach((c, i) => texto(c, xCol(i + 1), y, { align: "right", bold, cor: !bold && (c === "0" || c === "-") ? 150 : 0 }));
+    if (!bold) pontilhado(y + lh * 0.3);
     y += lh;
   };
   for (const g of f.grupos) {
