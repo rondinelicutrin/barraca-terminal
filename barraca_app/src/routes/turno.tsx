@@ -295,14 +295,8 @@ function ActiveShift() {
 
       {/* O fechamento (Esperado / Arrecadado / Diferença) agora fica no menu Ponto */}
       <div className="px-3 pb-4 space-y-3">
-        <div className="bg-card border border-border rounded-xl p-3 space-y-2">
-          <div className="text-sm font-medium">Relatório do turno (caixa e sobras)</div>
-          <p className="text-[11px] text-muted-foreground">
-            Gera o arquivo com as sobras dos produtos, o nome de quem está fechando e dos colegas.
-            Para o relatório completo, preencha todas as sobras antes de gerar.
-          </p>
-          <RelatorioSobrasBotoes turno={t} />
-        </div>
+        {/* Relatório só depois de fechar: antes dava para gerar e enviar o relatório com o turno ainda aberto */}
+        <RelatorioSobrasBotoes turno={t} />
         <div className={`rounded-xl p-3 text-center border-2 ${semPonto.length > 0 ? "bg-destructive/10 border-destructive" : "bg-card border-border"}`}>
           <p className={`text-xs font-extrabold uppercase leading-snug ${semPonto.length > 0 ? "text-destructive" : "text-muted-foreground"}`}>
             {semPonto.length > 0
