@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useStore, veResultadoCaixa, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
@@ -31,9 +32,12 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
   return lista;
 }
 
-// Dois botões (PDF e CSV) com o fechamento geral do turno, numa folha só
+// Dois botões (PDF e CSV) com o fechamento geral do turno, numa folha só.
+// Regra: o relatório só existe depois de o turno ser FECHADO (botão "Fechar turno" no menu Ponto). Antes,
+// funcionários geravam e enviavam o relatório e esqueciam de fechar o turno.
 export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
   const { state } = useStore();
+  if (!turno.closedAt) return <AvisoTurnoAberto />;
   const gerar = (formato: "pdf" | "csv") => {
     // Funcionário comum baixa a versão às cegas (sem resultado e sem valores de venda)
     const f = montarFechamentoImpresso(turno, state, veResultadoCaixa(state.currentUser));
@@ -44,6 +48,23 @@ export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
     <div className="grid grid-cols-2 gap-2">
       <Button onClick={() => gerar("pdf")}>📄 Fechamento (PDF)</Button>
       <Button variant="secondary" onClick={() => gerar("csv")}>📊 Fechamento (CSV)</Button>
+    </div>
+  );
+}
+
+export function AvisoTurnoAberto() {
+  const nav = useNavigate();
+  return (
+    <div role="alert" className="bg-destructive/10 border-2 border-destructive rounded-xl p-3 space-y-2">
+      <div className="text-sm font-bold text-destructive">⚠️ O TURNO AINDA ESTÁ ABERTO</div>
+      <p className="text-xs">
+        O relatório de fechamento (PDF/CSV) só pode ser gerado e enviado <b>depois de fechar o turno</b>.
+        Vá no menu <b>Ponto</b> e toque em <b>"Fechar turno"</b>; o relatório aparece na tela de turno fechado.
+      </p>
+      <Button className="w-full" variant="destructive" onClick={() => {
+        nav({ to: "/ponto" });
+        setTimeout(() => document.getElementById("fechar-o-turno")?.scrollIntoView({ behavior: "smooth", block: "start" }), 400);
+      }}>Ir para Fechar o turno</Button>
     </div>
   );
 }
@@ -226,7 +247,7 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
   );
 
   return (
-    <div className="bg-card border border-border rounded-xl p-3 space-y-2">
+    <div id="fechar-o-turno" className="bg-card border border-border rounded-xl p-3 space-y-2">
       <div className="text-sm font-semibold">Fechar o turno</div>
       <div className="text-[11px] text-muted-foreground">
         {t.date.split("-").reverse().join("/")} · {t.shift === "manha" ? "Manhã" : t.shift === "tarde" ? "Tarde" : "Noite"}
