@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import { vendeu, getAllProducts, valorConsumoPonto, type State, type Turno } from "./store";
+import { vendeu, getAllProducts, valorConsumoPonto, valoresConsumoPonto, type State, type Turno } from "./store";
 import { EXCLUIR_DO_TOTAL_PASTEL, type Product } from "./products";
 import { BRL, shiftLabel } from "./format";
 import { montarRelatorioSobras, type RelatorioSobras } from "./relatorio-sobras";
@@ -47,6 +47,25 @@ const GRUPOS: { titulo: string; filtro: (p: Product) => boolean; totalPasteis?: 
   { titulo: "Outros", filtro: (p) => p.category === "outros" },
 ];
 
+// Consumo de cada pessoa do turno (quem abriu + colegas), lançado no ponto da data do turno. Inclui quem
+// não consumiu nada (itens = ""). Itens grátis (ex.: água) aparecem com "(grátis)".
+export function consumoPorPessoaDoTurno(turno: Turno, state: State): ConsumoPessoa[] {
+  const products = getAllProducts(state);
+  const nomeProduto = (id: string) => products.find((p) => p.id === id)?.name ?? id;
+  return [turno.employee, ...(turno.outrosFuncionarios ?? [])].map((username) => {
+    const itens = state.pontos.filter((p) => p.employeeUsername === username && p.date === turno.date).flatMap((p) => p.consumo);
+    const qtd: Record<string, number> = {};
+    for (const c of itens) qtd[c.productId] = (qtd[c.productId] ?? 0) + c.qty;
+    const lista = Object.entries(qtd).filter(([, q]) => q > 0).map(([productId, q]) => ({ productId, qty: q }));
+    const valores = valoresConsumoPonto(state, username, lista);
+    return {
+      nome: state.funcionarios.find((f) => f.username === username)?.nome ?? username,
+      itens: lista.map((c) => `${c.qty}x ${nomeProduto(c.productId)}${(valores[c.productId] ?? 0) < 0.005 ? " (grátis)" : ""}`).join(", "),
+      valor: valorConsumoPonto(state, username, lista),
+    };
+  });
+}
+
 export function montarFechamentoImpresso(turno: Turno, state: State, completo = true): FechamentoImpresso {
   const products = getAllProducts(state);
   const base = montarRelatorioSobras(turno, products, state.funcionarios, state.taxasMaquininha);
@@ -82,21 +101,7 @@ export function montarFechamentoImpresso(turno: Turno, state: State, completo = 
     grupos.push(grupo);
   }
 
-  // Consumo de quem trabalhou no turno (quem abriu + colegas), lançado no ponto da data do turno
-  const nomeProduto = (id: string) => products.find((p) => p.id === id)?.name ?? id;
-  const consumoFuncionarios: ConsumoPessoa[] = [];
-  for (const username of [turno.employee, ...(turno.outrosFuncionarios ?? [])]) {
-    const itens = state.pontos.filter((p) => p.employeeUsername === username && p.date === turno.date).flatMap((p) => p.consumo);
-    if (itens.length === 0) continue;
-    const qtd: Record<string, number> = {};
-    for (const c of itens) qtd[c.productId] = (qtd[c.productId] ?? 0) + c.qty;
-    const lista = Object.entries(qtd).map(([productId, q]) => ({ productId, qty: q }));
-    consumoFuncionarios.push({
-      nome: state.funcionarios.find((f) => f.username === username)?.nome ?? username,
-      itens: lista.map((c) => `${c.qty}x ${nomeProduto(c.productId)}`).join(", "),
-      valor: valorConsumoPonto(state, username, lista),
-    });
-  }
+  const consumoFuncionarios = consumoPorPessoaDoTurno(turno, state).filter((c) => c.itens !== "");
 
   return {
     base, turnoNome: shiftLabel(turno.shift).replace(/^[^\p{L}]+/u, ""), grupos, totalVendido, consumoFuncionarios,

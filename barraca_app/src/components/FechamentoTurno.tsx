@@ -6,7 +6,7 @@ import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
-import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA } from "@/lib/fechamento-impresso";
+import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA, consumoPorPessoaDoTurno } from "@/lib/fechamento-impresso";
 
 // Campos do caixa que precisam estar preenchidos (aceita 0) antes de fechar o turno.
 // Todos os campos de cada maquininha em uso são obrigatórios: no turno da noite os dois valores
@@ -57,6 +57,30 @@ export function situacaoPonto(state: ReturnType<typeof useStore>["state"], t: Tu
     ok: state.pontos.some((p) => p.employeeUsername === username && p.date === t.date && !ehSoConsumo(p)),
   }));
   return { situacao, semPonto: situacao.filter((s) => !s.ok) };
+}
+
+// O que foi consumido (por pessoa, inclusive itens grátis como a água), o consumo da barraca e o descarte
+export function ConsumoDoTurno({ turno }: { turno: Turno }) {
+  const { state } = useStore();
+  const products = getAllProducts(state);
+  const admin = veResultadoCaixa(state.currentUser);
+  const pessoas = consumoPorPessoaDoTurno(turno, state);
+  const lista = (campo: "consumoEst" | "descarte") => products
+    .map((p) => ({ p, q: turno.items[p.id]?.[campo] || 0 })).filter(({ q }) => q > 0).map(({ p, q }) => `${q}x ${p.name}`);
+  const barraca = lista("consumoEst"), descarte = lista("descarte");
+  return (
+    <div className="bg-card border border-border rounded-xl p-3 space-y-1.5">
+      <div className="text-sm font-medium">🍽 Consumo e descarte do turno</div>
+      {pessoas.map((c) => (
+        <div key={c.nome} className="text-xs flex justify-between gap-2">
+          <span><span className="font-semibold">{c.nome}:</span> {c.itens || <span className="text-muted-foreground">nenhum consumo</span>}</span>
+          {admin && c.itens && <span className="mono shrink-0">{BRL(c.valor)}</span>}
+        </div>
+      ))}
+      {barraca.length > 0 && <div className="text-xs"><span className="font-semibold">Consumo da barraca:</span> {barraca.join(", ")}</div>}
+      <div className="text-xs"><span className="font-semibold">Descarte:</span> {descarte.length > 0 ? descarte.join(", ") : <span className="text-muted-foreground">nenhum</span>}</div>
+    </div>
+  );
 }
 
 // Resumo das entradas (entrada + chegada) de cada produto lançado no turno
@@ -113,7 +137,7 @@ function Row({ label, value, valueClass }: { label: string; value: string; value
 
 // Fechamento do turno (Esperado / Arrecadado / Diferença + botão Fechar) — fica no menu Ponto,
 // junto com o registro de entrada, saída e consumo.
-export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) {
+export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: Turno) => void; pendencias?: string[] }) {
   const { state, dispatch } = useStore();
   const t = state.turnoAtivo;
   const products = getAllProducts(state);
@@ -132,6 +156,11 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
   const consumoLancado = lancados("consumo"), consumoBarraca = lancados("consumoEst"), descarteLancado = lancados("descarte");
 
   const closeShift = () => {
+    if (pendencias.length > 0) {
+      alert(`Há consumo adicionado e ainda NÃO registrado de: ${pendencias.join(", ")}.\n\nToque em "Registrar" (acima) para gravar antes de fechar o turno.`);
+      document.getElementById("lancar-consumo-descarte")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     if (semPonto.length > 0) {
       alert(
         `ATENÇÃO: NÃO É POSSÍVEL FECHAR O TURNO SEM BATER O PONTO.\n\n` +
@@ -253,7 +282,8 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
           <div className="space-y-3 text-sm">
             <div className="bg-background border border-border rounded-lg p-2.5 space-y-1 text-xs">
               <div className="text-[11px] text-muted-foreground uppercase tracking-wide">Já lançado neste turno</div>
-              {listaLancados("Consumo dos funcionários", consumoLancado, "nenhum lançado")}
+              {consumoPorPessoaDoTurno(t, state).map((c) => <div key={c.nome}>{listaLancados(`Consumo de ${c.nome}`, c.itens ? [c.itens] : [], "nenhum lançado")}</div>)}
+              {consumoLancado.length > 0 && <div className="text-[11px] text-muted-foreground">Total no estoque do turno: {consumoLancado.join(", ")}</div>}
               {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
               {listaLancados("Descarte", descarteLancado, "nenhum lançado")}
             </div>
@@ -336,6 +366,8 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
             <Row key={x.item} label={x.item} value={x.qtd} />
           ))}
         </div>
+
+        <ConsumoDoTurno turno={turno} />
 
         <EntradasDoTurno grupos={rel.entradas} />
 
