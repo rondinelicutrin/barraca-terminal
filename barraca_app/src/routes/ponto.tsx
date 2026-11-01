@@ -128,6 +128,11 @@ function PontoPage() {
   }
 
   const qtdItens = (m: Record<string, number>) => Object.values(m).reduce((s, n) => s + n, 0);
+  // Consumo adicionado na tela mas ainda não gravado (só grava ao tocar em "Registrar")
+  const pendentesRascunho = [
+    ...(euConsumir && qtdItens(consumo) > 0 ? [state.funcionarios.find((f) => f.username === me?.username)?.nome ?? me?.username ?? ""] : []),
+    ...Object.entries(consumoColegas).filter(([u, m]) => colegas[u]?.consumir && qtdItens(m) > 0).map(([u]) => colegas[u]?.nome ?? u),
+  ];
   const nomeMe = state.funcionarios.find((f) => f.username === me.username)?.nome ?? me.username;
   // Tudo que já foi lançado (e ainda não registrado) para todas as pessoas: conta no limite de estoque
   const reservadoTotal = [consumo, ...Object.values(consumoColegas)].reduce(somarConsumo, {});
@@ -460,11 +465,16 @@ function PontoPage() {
             </p>
           )}
 
+          {pendentesRascunho.length > 0 && (
+            <p role="alert" className="text-xs font-semibold text-destructive bg-destructive/10 border border-destructive/50 rounded-md px-2 py-1.5">
+              ⚠️ Consumo ainda NÃO registrado de: {pendentesRascunho.join(", ")}. Toque em "Registrar" para gravar.
+            </p>
+          )}
           <Button className="w-full" onClick={save}>Registrar</Button>
         </div>
 
         {/* Fechamento do turno: Esperado, Arrecadado, Diferença e botão Fechar */}
-        {turnoAtivo && <FechamentoTurno onClosed={setTurnoFechado} />}
+        {turnoAtivo && <FechamentoTurno onClosed={setTurnoFechado} pendencias={pendentesRascunho} />}
 
         {/* Consumo detalhado — meu e dos colegas com quem trabalhei, com filtro de período */}
         <ConsumoDetalhado meuUsername={me.username} from={perFrom} to={perTo} setFrom={setPerFrom} setTo={setPerTo} />
