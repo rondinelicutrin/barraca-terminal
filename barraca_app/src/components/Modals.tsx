@@ -58,7 +58,9 @@ export function ConsumoModal({
     const val = parseInt2(rawVal);
     const limite = items ? Math.max(0, limiteDisponivel(items[pid], "consumo") - (reservado?.[pid] ?? 0)) : 999;
     if (semEstoque(pid, limite) && val > 0) {
-      alert("Sem estoque disponível para este produto.");
+      alert(hasActiveTurno
+        ? "Sem estoque disponível para este produto no turno (confira a Entrada/Chegada no menu Turno)."
+        : "Nenhum turno aberto: o consumo só pode ser lançado com o turno aberto, pela pessoa do turno (tocando no seu nome no Ponto) ou pelo administrador.");
       return;
     }
     if (val > limite) {
@@ -76,7 +78,10 @@ export function ConsumoModal({
           {username ? "Desconto configurado por produto para este funcionário · Água é grátis" : "Desconto = 50% do preço · Água é grátis"}
         </p>
         {!hasActiveTurno && (
-          <p className="text-[11px] text-warning">Nenhum turno aberto — abra um turno para liberar o consumo.</p>
+          <p className="text-[11px] text-warning">
+            Nenhum turno aberto: o consumo dá baixa no estoque do turno, então ele é lançado com o turno aberto — pela pessoa
+            do turno (no Ponto dela, tocando no seu nome) ou pelo administrador.
+          </p>
         )}
         <div className="space-y-1.5 mt-2">
           {products.map((p) => {
