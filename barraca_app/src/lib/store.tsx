@@ -244,6 +244,8 @@ type Action =
   | { type: "SET_TURNOS_FROM_DB"; turnoAtivo: Turno | null; historico: Turno[] }
   | { type: "SET_TURNO_ATIVO_FROM_DB"; turnoAtivo: Turno | null }
   | { type: "SET_PONTOS_FROM_DB"; pontos: Ponto[] }
+  | { type: "ATUALIZAR_PONTOS_RECENTES"; desde: string; pontos: Ponto[]; manterIds: string[] }
+  | { type: "ATUALIZAR_HISTORICO_RECENTE"; desde: string; historico: Turno[] }
   | { type: "SET_RETIRADAS_FROM_DB"; retiradas: Retirada[] }
   | { type: "SET_DESCONTOS_FROM_DB"; descontos: Record<string, Record<string, DescontoConfig>> }
   | { type: "SET_CONFIG_FROM_DB"; configGeral: ConfigGeral; taxasMaquininha: TaxasMaquininha }
@@ -865,6 +867,21 @@ function reducer(s: State, a: Action): State {
       const idsDb = new Set(a.pontos.map((p) => p.id));
       const soLocais = s.pontos.filter((p) => !idsDb.has(p.id));
       n = { ...s, pontos: [...soLocais, ...a.pontos] }; break;
+    }
+    case "ATUALIZAR_PONTOS_RECENTES": {
+      // Atualização periódica: pontos a partir de "desde" vêm do banco (o que outros aparelhos lançaram,
+      // corrigiram ou apagaram); os mais antigos ficam como estão. Mantém os lançados aqui há pouco
+      // que talvez ainda não apareçam na consulta.
+      const idsDb = new Set(a.pontos.map((p) => p.id));
+      const manter = new Set(a.manterIds);
+      const antigos = s.pontos.filter((p) => p.date < a.desde);
+      const recentesLocais = s.pontos.filter((p) => p.date >= a.desde && !idsDb.has(p.id) && manter.has(p.id));
+      n = { ...s, pontos: [...recentesLocais, ...a.pontos, ...antigos.filter((p) => !idsDb.has(p.id))] }; break;
+    }
+    case "ATUALIZAR_HISTORICO_RECENTE": {
+      const idsDb = new Set(a.historico.map((t) => t.id));
+      const antigos = s.historico.filter((t) => t.date < a.desde && !idsDb.has(t.id));
+      n = { ...s, historico: [...a.historico, ...antigos] }; break;
     }
     case "SET_RETIRADAS_FROM_DB":
       n = { ...s, retiradas: a.retiradas }; break;
@@ -1741,6 +1758,46 @@ async function gravarAjusteFolha(row: Record<string, unknown>) {
   }
 }
 
+const somarDiasISO = (iso: string, n: number) => {
+  const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n);
+  const p2 = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+};
+
+// Pontos (com o consumo) a partir de uma data (ou todos). undefined = não deu para consultar.
+async function buscarPontos(desde?: string): Promise<Ponto[] | undefined> {
+  const { data: pontoRows, error } = await buscarTodos(() => {
+    let q = supabase.from("pontos").select("*");
+    if (desde) q = q.gte("date", desde);
+    return q.order("date", { ascending: false }).order("id");
+  });
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.error("Não foi possível carregar os pontos do Supabase:", error);
+    return undefined;
+  }
+  if (pontoRows.length === 0) return [];
+  const consumoRows = await buscarEmLotes("ponto_consumo", "ponto_id", pontoRows.map((r: any) => r.id));
+  const consumoByPonto: Record<string, PontoConsumoItem[]> = {};
+  for (const cr of consumoRows ?? []) (consumoByPonto[cr.ponto_id] ??= []).push({ productId: cr.product_id, qty: cr.qty });
+  return pontoRows.map((row: any) => pontoFromRow(row, consumoByPonto[row.id] ?? []));
+}
+
+// Turnos fechados (com os produtos) a partir de uma data (ou todos). Lança o erro para quem chamar.
+async function buscarHistorico(desde?: string): Promise<Turno[]> {
+  const { data: histRows, error } = await buscarTodos(() => {
+    let q = supabase.from("turnos").select("*").not("closed_at", "is", null);
+    if (desde) q = q.gte("date", desde);
+    return q.order("date", { ascending: false }).order("id");
+  });
+  if (error) throw error;
+  if (histRows.length === 0) return [];
+  const allItemRows = await buscarEmLotes("turno_itens", "turno_id", histRows.map((r: any) => r.id));
+  const itemsByTurno: Record<string, Record<string, ShiftItem>> = {};
+  for (const ir of allItemRows ?? []) (itemsByTurno[ir.turno_id] ??= {})[ir.product_id] = shiftItemFromRow(ir);
+  return histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
+}
+
 // Turno em andamento no banco (com os produtos). undefined = não deu para consultar (sem internet).
 export async function buscarTurnoAberto(): Promise<Turno | null | undefined> {
   const { data, error } = await supabase.from("turnos").select("*").is("closed_at", null)
@@ -1865,19 +1922,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           turnoAtivo = turnoFromRow(row, items);
         }
 
-        const { data: histRows, error: errHist } = await buscarTodos(() => supabase
-          .from("turnos").select("*").not("closed_at", "is", null).order("date", { ascending: false }).order("id"));
-        if (errHist) throw errHist;
-        let historico: Turno[] = [];
-        if (histRows && histRows.length > 0) {
-          const ids = histRows.map((r: any) => r.id);
-          const allItemRows = await buscarEmLotes("turno_itens", "turno_id", ids);
-          const itemsByTurno: Record<string, Record<string, ShiftItem>> = {};
-          for (const ir of allItemRows ?? []) {
-            (itemsByTurno[ir.turno_id] ??= {})[ir.product_id] = shiftItemFromRow(ir);
-          }
-          historico = histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
-        }
+        let historico = await buscarHistorico();
 
         // Turnos ainda esperando a internet neste aparelho: a versão daqui vale (é a mais nova)
         const excluidosAqui = new Set(pendentesDoTipo<string>("turnoExcluir"));
@@ -1908,23 +1953,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // 4) Carrega os registros de ponto (e o consumo de cada um) do Supabase
     (async () => {
       await filaEnviada;
-      const { data: pontoRows, error: errPontos } = await buscarTodos(() => supabase
-        .from("pontos").select("*").order("date", { ascending: false }).order("id"));
-      if (errPontos) {
-        // eslint-disable-next-line no-console
-        console.error("Não foi possível carregar os pontos do Supabase:", errPontos);
-        return;
-      }
-      let pontos: Ponto[] = [];
-      if (pontoRows && pontoRows.length > 0) {
-        const ids = pontoRows.map((r: any) => r.id);
-        const consumoRows = await buscarEmLotes("ponto_consumo", "ponto_id", ids);
-        const consumoByPonto: Record<string, PontoConsumoItem[]> = {};
-        for (const cr of consumoRows ?? []) {
-          (consumoByPonto[cr.ponto_id] ??= []).push({ productId: cr.product_id, qty: cr.qty });
-        }
-        pontos = pontoRows.map((row: any) => pontoFromRow(row, consumoByPonto[row.id] ?? []));
-      }
+      const pontos = await buscarPontos();
+      if (pontos === undefined) return;
       dispatch({ type: "SET_PONTOS_FROM_DB", pontos });
     })();
 
@@ -2019,6 +2049,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: doBanco });
   };
 
+  // Pontos, consumo, fechamentos e ajustes da folha lançados em OUTROS aparelhos: antes só chegavam quando o
+  // app era aberto de novo (no celular a aba fica aberta por dias) — ex.: a folha da semana não mostrava os
+  // pontos de domingo. Atualiza os últimos 60 dias ao voltar para o app e a cada 2 minutos, e nunca por cima
+  // do que ainda está esperando para ser enviado deste aparelho.
+  const pontosRecentesRef = useRef(new Map<string, number>()); // id → quando foi lançado aqui
+  const ultimaAtualizacaoRef = useRef(0);
+  const atualizarDadosDoBanco = async (forcar = false) => {
+    if (!turnosCarregadosRef.current) return;
+    const agora = Date.now();
+    if (!forcar && agora - ultimaAtualizacaoRef.current < 30000) return;
+    ultimaAtualizacaoRef.current = agora;
+    const desde = somarDiasISO(todayISO(), -60);
+    if (pendentesDoTipo("ponto").length === 0) {
+      const pontos = await buscarPontos(desde);
+      if (pontos !== undefined && pendentesDoTipo("ponto").length === 0) {
+        const manterIds = [...pontosRecentesRef.current].filter(([, t]) => Date.now() - t < 3 * 60000).map(([id]) => id);
+        dispatch({ type: "ATUALIZAR_PONTOS_RECENTES", desde, pontos, manterIds });
+      }
+    }
+    const histOcupado = () => pendentesDoTipo("turno").length > 0 || pendentesDoTipo("turnoExcluir").length > 0 || histPendentesRef.current.size > 0;
+    if (!histOcupado()) {
+      try {
+        const historico = await buscarHistorico(desde);
+        if (!histOcupado()) dispatch({ type: "ATUALIZAR_HISTORICO_RECENTE", desde, historico });
+      } catch { /* sem internet: tenta depois */ }
+    }
+    if (pendentesDoTipo("ajusteFolha").length === 0) await carregarAjustesFolha(dispatch);
+  };
+
   // Recarrega os produtos (preço, estoque) ao voltar para o app — o dono pode ter mudado algo em outro aparelho
   const recarregarProdutos = () => {
     void carregarProdutos(dispatch, {}, false, () => { estoqueSujoRef.current = false; });
@@ -2030,13 +2089,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const flushTudo = () => { flushSincronizacaoTurno(); flushSyncPendentes(); };
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") flushTudo();
-      else { void processar().then(atualizarTurnoAberto); recarregarProdutos(); }
+      else { void processar().then(atualizarTurnoAberto).then(() => atualizarDadosDoBanco()); recarregarProdutos(); }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pagehide", flushTudo);
     // Sem internet: tenta reenviar o que está esperando a cada 20 segundos
     // e atualiza o turno em andamento com o que outros aparelhos lançaram
-    const tentarDeNovo = setInterval(() => { void processar().then(atualizarTurnoAberto); }, 20000);
+    let voltas = 0;
+    const tentarDeNovo = setInterval(() => {
+      voltas += 1;
+      void processar().then(atualizarTurnoAberto).then(() => {
+        // a cada 2 minutos (6 × 20 s), com o app na tela
+        if (voltas % 6 === 0 && document.visibilityState === "visible") return atualizarDadosDoBanco(true);
+      });
+    }, 20000);
     return () => {
       clearInterval(tentarDeNovo);
       document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -2088,6 +2154,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ) {
       turnoSujoRef.current = true;
     }
+    if (a.type === "ADD_PONTO") pontosRecentesRef.current.set(a.p.id, Date.now());
     // Quais produtos/campos mudaram (só eles vão para o banco)
     if (a.type === "START_SHIFT" || a.type === "EDIT_ATIVO") itensAlteradosRef.current = "todos";
     else if (a.type === "UPDATE_ITEM") marcarAlterado(a.productId, Object.keys(a.patch));
