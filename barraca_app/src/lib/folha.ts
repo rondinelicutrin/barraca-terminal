@@ -185,3 +185,46 @@ export function consumoSemDono(state: State, from: string, to: string): ConsumoS
     })
     .sort((a, b) => a.date.localeCompare(b.date) || a.produto.localeCompare(b.produto));
 }
+
+// ---- Fornecedores (fardo de cana e gelo) e pagamentos extras da semana — só dono/administrador ----
+// O que o fornecedor entregou na semana é a CHEGADA lançada nos turnos (a "entrada" do turno é a sobra
+// do turno anterior; somá-la contaria o mesmo produto várias vezes).
+export const PRODUTOS_FORNECEDOR = ["cc_fardo", "ot_gelo"];
+export const idPrecoFornecedor = (semana: string, productId: string) => `forn|${semana}|${productId}`;
+
+export interface LinhaFornecedor {
+  productId: string; nome: string; decimal?: boolean;
+  qtd: number; porDia: { date: string; qtd: number }[];
+  preco: number; precoDaSemana: boolean; // false = repetido da última semana com preço
+  total: number;
+}
+
+export function precoFornecedor(state: State, semana: string, productId: string): { preco: number; daSemana: boolean } {
+  const daSemana = state.itensSemana[idPrecoFornecedor(semana, productId)];
+  if (daSemana) return { preco: daSemana.valor, daSemana: true };
+  const anteriores = Object.values(state.itensSemana)
+    .filter((i) => i.tipo === "fornecedor" && i.productId === productId && i.semana < semana)
+    .sort((a, b) => b.semana.localeCompare(a.semana));
+  return { preco: anteriores[0]?.valor ?? 0, daSemana: false };
+}
+
+export function fornecedoresDaSemana(state: State, semana: string): LinhaFornecedor[] {
+  const fim = fimSemana(semana);
+  const produtos = getAllProducts(state);
+  const turnos = [...state.historico, ...(state.turnoAtivo ? [state.turnoAtivo] : [])].filter((t) => t.date >= semana && t.date <= fim);
+  return PRODUTOS_FORNECEDOR.map((productId) => {
+    const p = produtos.find((x) => x.id === productId);
+    const dia: Record<string, number> = {};
+    for (const t of turnos) {
+      const q = t.items[productId]?.chegada ?? 0;
+      if (q > 0) dia[t.date] = (dia[t.date] ?? 0) + q;
+    }
+    const porDia = Object.entries(dia).sort(([a], [b]) => a.localeCompare(b)).map(([date, qtd]) => ({ date, qtd }));
+    const qtd = porDia.reduce((s, d) => s + d.qtd, 0);
+    const { preco, daSemana } = precoFornecedor(state, semana, productId);
+    return { productId, nome: p?.name ?? productId, decimal: p?.decimal, qtd, porDia, preco, precoDaSemana: daSemana, total: qtd * preco };
+  });
+}
+
+export const extrasDaSemana = (state: State, semana: string) =>
+  Object.values(state.itensSemana).filter((i) => i.tipo === "extra" && i.semana === semana).sort((a, b) => a.id.localeCompare(b.id));

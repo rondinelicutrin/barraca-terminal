@@ -153,6 +153,18 @@ export function movimentosDinheiro(lista: Retirada[]): { retirado: number; inclu
 }
 
 // Adicional/desconto de UMA semana de um funcionário (lançado no fechamento semanal da folha)
+// Itens da folha semanal que não são de um funcionário (só dono/administrador):
+// - "extra": pagamento extra da semana (descrição/motivo + valor), somado ao total a pagar;
+// - "fornecedor": preço pago ao fornecedor por unidade de um produto (fardo de cana, gelo) naquela semana.
+export interface ItemSemana {
+  id: string;
+  semana: string; // segunda-feira da semana (AAAA-MM-DD)
+  tipo: "extra" | "fornecedor";
+  descricao?: string;
+  productId?: string;
+  valor: number;
+}
+
 export interface AjusteFolha {
   adicional: number;
   desconto: number;
@@ -191,6 +203,7 @@ export interface State {
   retiradas: Retirada[]; // retiradas de dinheiro do caixa (com motivo)
   taxasMaquininha: TaxasMaquininha; // percentual cobrado por cada maquininha
   ajustesFolha: Record<string, AjusteFolha>; // "username|segunda-feira da semana" -> ajuste da semana
+  itensSemana: Record<string, ItemSemana>;   // pagamentos extras e preços de fornecedor, por id
   // true depois que o login e os dados guardados no navegador foram lidos. Até lá as telas não
   // redirecionam ninguém — antes, recarregar a página (F5) jogava o usuário para o login/Painel.
   hidratado?: boolean;
@@ -218,6 +231,7 @@ const initialState = (): State => {
     retiradas: [],
     taxasMaquininha: { maq1: 0, maq2: 0 },
     ajustesFolha: {},
+    itensSemana: {},
   };
 };
 
@@ -273,6 +287,9 @@ type Action =
   | { type: "SET_TAXAS_MAQUININHA"; patch: Partial<TaxasMaquininha> }
   | { type: "SET_AJUSTE_FOLHA"; username: string; semana: string; patch: Partial<AjusteFolha> }
   | { type: "SET_AJUSTES_FOLHA_FROM_DB"; ajustes: Record<string, AjusteFolha> }
+  | { type: "SET_ITEM_SEMANA"; item: ItemSemana }
+  | { type: "REMOVE_ITEM_SEMANA"; id: string }
+  | { type: "SET_ITENS_SEMANA_FROM_DB"; itens: ItemSemana[]; manterIds: string[] }
   | { type: "ADD_PRODUCT"; b: Product }
   | { type: "REMOVE_PRODUCT"; productId: string };
 
@@ -647,6 +664,7 @@ function reducer(s: State, a: Action): State {
       if (!migrated.retiradas) migrated.retiradas = [];
       if (!migrated.taxasMaquininha) migrated.taxasMaquininha = { maq1: 0, maq2: 0 };
       if (!migrated.ajustesFolha) migrated.ajustesFolha = {};
+      if (!migrated.itensSemana) migrated.itensSemana = {};
       if (migrated.turnoAtivo) {
         const c = migrated.turnoAtivo.caixa as any;
         if (c.dinheiro !== undefined && c.dinheiroFinal === undefined) {
@@ -969,6 +987,18 @@ function reducer(s: State, a: Action): State {
       n = { ...s, retiradas: s.retiradas.filter((r) => r.id !== a.id) }; break;
     case "SET_TAXAS_MAQUININHA":
       n = { ...s, taxasMaquininha: { ...s.taxasMaquininha, ...a.patch } }; break;
+    case "SET_ITEM_SEMANA":
+      n = { ...s, itensSemana: { ...s.itensSemana, [a.item.id]: a.item } }; break;
+    case "REMOVE_ITEM_SEMANA": {
+      const { [a.id]: _removido, ...resto } = s.itensSemana;
+      n = { ...s, itensSemana: resto }; break;
+    }
+    case "SET_ITENS_SEMANA_FROM_DB": {
+      // O banco manda; ficam também os que ainda estão esperando para ser enviados deste aparelho
+      const doBanco = Object.fromEntries(a.itens.map((i) => [i.id, i]));
+      for (const id of a.manterIds) if (s.itensSemana[id]) doBanco[id] = s.itensSemana[id];
+      n = { ...s, itensSemana: doBanco }; break;
+    }
     case "SET_AJUSTE_FOLHA": {
       const k = `${a.username}|${a.semana}`;
       const atual = s.ajustesFolha[k] ?? { adicional: 0, desconto: 0 };
@@ -1733,6 +1763,47 @@ async function carregarAjustesFolha(dispatch: React.Dispatch<Action>) {
   dispatch({ type: "SET_AJUSTES_FOLHA_FROM_DB", ajustes });
 }
 
+let avisouSqlExtras = false;
+const avisarSqlExtras = () => {
+  if (avisouSqlExtras) return;
+  avisouSqlExtras = true;
+  alert("Para salvar os pagamentos extras e os preços de fornecedor da folha no banco, rode o arquivo folha_extras.sql no SQL Editor do Supabase (até lá eles valem só neste aparelho).");
+};
+
+async function carregarItensSemana(dispatch: React.Dispatch<Action>, manterIds: string[] = []) {
+  const { data, error } = await supabase.from("folha_semana_itens").select("*");
+  if (error) {
+    // eslint-disable-next-line no-console
+    if (!tabelaFaltando(error)) console.error("Não foi possível carregar os itens da folha do Supabase:", error);
+    return;
+  }
+  const itens: ItemSemana[] = (data ?? []).map((r: any) => ({
+    id: r.id, semana: String(r.semana_inicio).slice(0, 10), tipo: r.tipo === "fornecedor" ? "fornecedor" : "extra",
+    descricao: r.descricao ?? undefined, productId: r.product_id ?? undefined, valor: Number(r.valor) || 0,
+  }));
+  dispatch({ type: "SET_ITENS_SEMANA_FROM_DB", itens, manterIds });
+}
+
+async function gravarItemSemana(row: Record<string, unknown>) {
+  try {
+    const { error } = await supabase.from("folha_semana_itens").upsert(row, { onConflict: "id" });
+    if (error) throw error;
+  } catch (e) {
+    if (tabelaFaltando(e)) { avisarSqlExtras(); return; }
+    throw e;
+  }
+}
+
+async function removerItemSemana(id: string) {
+  try {
+    const { error } = await supabase.from("folha_semana_itens").delete().eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    if (tabelaFaltando(e)) return;
+    throw e;
+  }
+}
+
 function enviarAjusteFolha(s: State, username: string, semana: string) {
   const a = s.ajustesFolha[`${username}|${semana}`];
   if (!a) return;
@@ -1849,6 +1920,8 @@ registrarExecutor("desconto", gravarDesconto);
 registrarExecutor("descontoRemover", removerDesconto);
 registrarExecutor("config", gravarConfig);
 registrarExecutor("ajusteFolha", gravarAjusteFolha);
+registrarExecutor("itemSemana", gravarItemSemana);
+registrarExecutor("itemSemanaRemover", removerItemSemana);
 
 const raw0 = (salvo: Partial<State>): State | null =>
   Object.keys(salvo).length > 0 ? { ...initialState(), ...salvo } : null;
@@ -1975,6 +2048,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     // 7) Adicional/desconto de cada semana (fechamento semanal da folha)
     void filaEnviada.then(() => carregarAjustesFolha(dispatch));
+    void filaEnviada.then(() => carregarItensSemana(dispatch, pendentesDoTipo<any>("itemSemana").map((r) => r.id)));
 
     // 6) Produtos: preços, produtos cadastrados pelo dono, removidos e estoque
     (async () => {
@@ -2076,6 +2150,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch { /* sem internet: tenta depois */ }
     }
     if (pendentesDoTipo("ajusteFolha").length === 0) await carregarAjustesFolha(dispatch);
+    if (pendentesDoTipo("itemSemana").length === 0 && pendentesDoTipo("itemSemanaRemover").length === 0) await carregarItensSemana(dispatch);
   };
 
   // Recarrega os produtos (preço, estoque) ao voltar para o app — o dono pode ter mudado algo em outro aparelho
@@ -2217,6 +2292,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       cancelarSyncPendente(chave);
       // Mesma chave do envio do desconto: se ele ainda estava esperando a internet, a remoção o substitui
       enviar("descontoRemover", { username: a.username, productId: a.productId }, { chave });
+    } else if (a.type === "SET_ITEM_SEMANA") {
+      // Lido na hora do envio (digitar "30" grava 30, não "3")
+      const chave = `itemSemana:${a.item.id}`;
+      agendarSync(chave, async () => {
+        const i = stateRef.current.itensSemana[a.item.id];
+        if (!i) return;
+        enviar("itemSemana", { id: i.id, semana_inicio: i.semana, tipo: i.tipo, descricao: i.descricao?.trim() || null,
+          product_id: i.productId ?? null, valor: i.valor || 0 }, { chave });
+      });
+    } else if (a.type === "REMOVE_ITEM_SEMANA") {
+      const chave = `itemSemana:${a.id}`;
+      cancelarSyncPendente(chave);
+      enviar("itemSemanaRemover", a.id, { chave });
     } else if (a.type === "SET_AJUSTE_FOLHA") {
       // Lido na hora do envio: digitar "30" grava 30, não "3"
       agendarSync(`ajuste:${a.username}|${a.semana}`, async () => enviarAjusteFolha(stateRef.current, a.username, a.semana));

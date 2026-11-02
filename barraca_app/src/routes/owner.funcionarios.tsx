@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, getAllProducts, valorConsumoPonto, ehSoConsumo, normalizarUsuario, type Funcionario } from "@/lib/store";
-import { calcularFolha, consumoSemDono, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, horasEntre, type Folha, type DiaTrabalhado } from "@/lib/folha";
+import { calcularFolha, consumoSemDono, fornecedoresDaSemana, extrasDaSemana, idPrecoFornecedor, pontosDoPeriodo, semanaPassada, fimSemana, inicioSemana, chaveAjuste, horasEntre, type Folha, type DiaTrabalhado } from "@/lib/folha";
 import { SemanaPicker } from "@/components/SemanaPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -257,13 +257,27 @@ function DetalheFolha({ calc, nome }: { calc: Folha; nome: string }) {
       </div>
       {calc.consumoDetalhe.length > 0 && (
         <div>
-          <div className="text-xs font-semibold mb-1">Consumo dia a dia</div>
+          <div className="text-xs font-semibold mb-1">Consumo dia a dia <span className="font-normal text-muted-foreground">(altere a quantidade para acertos; 0 tira o item)</span></div>
           <div className="space-y-1.5">
             {calc.consumoDetalhe.map((d) => (
               <div key={d.pontoId} className="bg-background border border-border/60 rounded-md p-2 text-[11px]">
                 <div className="text-muted-foreground mb-0.5">{formatDateBR(d.date)}</div>
                 {d.itens.map((i) => (
-                  <div key={i.productId} className="flex justify-between"><span>{i.qty}× {i.nome}</span><span className="mono">{BRL(i.valor)}</span></div>
+                  <div key={i.productId} className="flex justify-between items-center gap-2">
+                    <span className="flex items-center gap-1.5">
+                      {/* Acerto do consumo: muda a quantidade (0 tira o item) */}
+                      <BufferedNumberInput value={i.qty} decimal={false} className="w-14 h-7 text-xs" aria-label={`Quantidade de ${i.nome} em ${formatDateBR(d.date)}`}
+                        onChange={() => {}}
+                        onBlur={(n) => {
+                          const q = Math.max(0, Math.round(n));
+                          if (q === i.qty) return;
+                          if (q === 0 && !confirm(`Tirar ${i.nome} do consumo de ${nome} em ${formatDateBR(d.date)}?`)) return;
+                          dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: d.pontoId, productId: i.productId, qty: q });
+                        }} />
+                      × {i.nome}
+                    </span>
+                    <span className="mono">{BRL(i.valor)}</span>
+                  </div>
                 ))}
                 <div className="flex justify-between font-medium mt-0.5"><span>Subtotal</span><span className="mono">{BRL(d.subtotal)}</span></div>
               </div>
@@ -673,6 +687,21 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
 
   const totalPagar = rows.reduce((s, r) => s + r.calc.liquido, 0);
   const semDono = useMemo(() => consumoSemDono(state, from, to), [state, from, to]);
+  // Fornecedores (fardo de cana e gelo: chegadas da semana × preço do fornecedor) e pagamentos extras
+  const fornecedores = useMemo(() => fornecedoresDaSemana(state, semana), [state, semana]);
+  const extras = useMemo(() => extrasDaSemana(state, semana), [state, semana]);
+  const totalFornecedores = fornecedores.reduce((s, l) => s + l.total, 0);
+  const totalExtras = extras.reduce((s, e) => s + (e.valor || 0), 0);
+  const totalGeral = totalPagar + totalFornecedores + totalExtras;
+  const setPreco = (productId: string, valor: number) =>
+    dispatch({ type: "SET_ITEM_SEMANA", item: { id: idPrecoFornecedor(semana, productId), semana, tipo: "fornecedor", productId, valor } });
+  const addExtra = () =>
+    dispatch({ type: "SET_ITEM_SEMANA", item: { id: `extra|${Date.now()}|${Math.random().toString(36).slice(2, 7)}`, semana, tipo: "extra", descricao: "", valor: 0 } });
+  const fmtQtd = (n: number, decimal?: boolean) => (decimal || !Number.isInteger(n) ? n.toLocaleString("pt-BR") : String(n));
+  const resumoLinhas: [string, number][] = [
+    ["Funcionários", totalPagar], ["Fornecedores (fardo de cana e gelo)", totalFornecedores], ["Pagamentos extras", totalExtras],
+  ];
+
   const ajuste = (username: string) => state.ajustesFolha[chaveAjuste(username, semana)];
   const setAjuste = (username: string, patch: { adicional?: number; desconto?: number; observacao?: string }) =>
     dispatch({ type: "SET_AJUSTE_FOLHA", username, semana, patch });
@@ -680,7 +709,18 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
   const exportCSV = () => {
     const linhas: (string | number)[][] = [];
     for (const r of rows.filter((x) => x.temAlgo)) linhas.push(...linhasCsvFuncionario(r.calc, r.f, periodo));
-    linhas.push(["TOTAL A PAGAR", periodo, "", "", "", totalPagar.toFixed(2)]);
+    linhas.push(["TOTAL FUNCIONÁRIOS", periodo, "", "", "", totalPagar.toFixed(2)]);
+    linhas.push([]);
+    linhas.push(["FORNECEDORES", "Quantidade (chegadas)", "Preço (R$)", "", "", "Valor (R$)"]);
+    for (const l of fornecedores) linhas.push([l.nome, fmtQtd(l.qtd, l.decimal).replace(".", ","), l.preco.toFixed(2), "", "", l.total.toFixed(2)]);
+    linhas.push(["TOTAL FORNECEDORES", "", "", "", "", totalFornecedores.toFixed(2)]);
+    linhas.push([]);
+    linhas.push(["PAGAMENTOS EXTRAS", "Motivo", "", "", "", "Valor (R$)"]);
+    for (const e of extras) linhas.push(["Extra", (e.descricao || "").replace(/;/g, ","), "", "", "", (e.valor || 0).toFixed(2)]);
+    linhas.push(["TOTAL EXTRAS", "", "", "", "", totalExtras.toFixed(2)]);
+    linhas.push([]);
+    for (const [k, v] of resumoLinhas) linhas.push([k, "", "", "", "", v.toFixed(2)]);
+    linhas.push(["TOTAL GERAL DA SEMANA", periodo, "", "", "", totalGeral.toFixed(2)]);
     baixarCsv(`folha-semanal_${from}_${to}.csv`, CSV_CAB, linhas);
   };
 
@@ -698,7 +738,25 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             f.nome, String(calc.diasTrabalhados), calc.horas.toFixed(2), BRL(calc.bruto), BRL(calc.transp + calc.ref),
             BRL(calc.adicional), BRL(calc.consumo), BRL(calc.desconto), BRL(calc.liquido),
           ]),
-          totalRow: ["TOTAL A PAGAR", "", "", "", "", "", "", "", BRL(totalPagar)],
+          totalRow: ["TOTAL FUNCIONÁRIOS", "", "", "", "", "", "", "", BRL(totalPagar)],
+        },
+        {
+          heading: "Fornecedores (chegadas da semana)",
+          columns: ["Produto", "Quantidade", "Preço", "Valor"],
+          rows: fornecedores.map((l) => [l.nome, fmtQtd(l.qtd, l.decimal), BRL(l.preco), BRL(l.total)]),
+          totalRow: ["TOTAL FORNECEDORES", "", "", BRL(totalFornecedores)],
+        },
+        {
+          heading: "Pagamentos extras",
+          columns: ["Motivo", "Valor"],
+          rows: extras.length > 0 ? extras.map((e) => [e.descricao || "(sem motivo)", BRL(e.valor || 0)]) : [["Nenhum", ""]],
+          totalRow: ["TOTAL EXTRAS", BRL(totalExtras)],
+        },
+        {
+          heading: "Resumo da semana",
+          columns: ["Item", "Valor"],
+          rows: resumoLinhas.map(([k, v]) => [k, BRL(v)]),
+          totalRow: ["TOTAL GERAL DA SEMANA", BRL(totalGeral)],
         },
         ...comTrabalho.flatMap(({ f, calc }) => secoesPdfFuncionario(calc, f, f.nome)),
       ],
@@ -734,10 +792,18 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             </div>
           )}
 
-          <div className="bg-card border border-primary/40 rounded-lg p-3 flex justify-between items-center">
-            <span className="text-sm font-semibold">Total a pagar na semana</span>
-            <span className="mono text-primary text-lg font-semibold">{BRL(totalPagar)}</span>
+          {/* Resumo separado (funcionários × fornecedores × extras) e o total junto */}
+          <div className="bg-card border border-primary/40 rounded-lg p-3 space-y-1">
+            <div className="text-sm font-semibold mb-1">Resumo da semana</div>
+            {resumoLinhas.map(([k, v]) => (
+              <div key={k} className="flex justify-between text-xs"><span className="text-muted-foreground">{k}</span><span className="mono">{BRL(v)}</span></div>
+            ))}
+            <div className="flex justify-between items-center border-t border-border pt-1.5 mt-1">
+              <span className="text-sm font-semibold">Total geral da semana</span>
+              <span className="mono text-primary text-lg font-semibold">{BRL(totalGeral)}</span>
+            </div>
           </div>
+          <div className="text-xs font-semibold pt-1">👥 Funcionários <span className="font-normal text-muted-foreground">· total {BRL(totalPagar)}</span></div>
 
           <div className="space-y-2">
             {rows.map(({ f, calc, temAlgo }) => {
@@ -783,6 +849,51 @@ function FolhaSemanal({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             })}
             {rows.length === 0 && <div className="text-sm text-muted-foreground">Nenhum funcionário.</div>}
           </div>
+
+          <div className="bg-card border border-border rounded-lg p-3 space-y-2">
+            <div className="flex justify-between text-sm font-semibold"><span>🚚 Fornecedores</span><span className="mono text-primary">{BRL(totalFornecedores)}</span></div>
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              Soma das <b>chegadas</b> lançadas nos turnos da semana × o preço pago ao fornecedor. O preço fica só aqui (dono/administrador)
+              e repete o da última semana até você mudar.
+            </p>
+            {fornecedores.map((l) => (
+              <div key={l.productId} className="bg-background border border-border/60 rounded-md p-2 space-y-1.5">
+                <div className="flex justify-between text-xs font-medium">
+                  <span>{l.nome}: {fmtQtd(l.qtd, l.decimal)} na semana</span>
+                  <span className="mono">{BRL(l.total)}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <label className="text-muted-foreground shrink-0">Preço do fornecedor (R$ por unidade)</label>
+                  <BufferedNumberInput value={l.preco} decimal placeholder="0,00" className="w-24 h-8" aria-label={`Preço do fornecedor de ${l.nome}`}
+                    onChange={(n) => setPreco(l.productId, n)} />
+                </div>
+                {!l.precoDaSemana && l.preco > 0 && <div className="text-[10px] text-muted-foreground">Preço repetido da última semana.</div>}
+                {l.porDia.length > 0 && (
+                  <div className="text-[10px] text-muted-foreground mono">{l.porDia.map((d) => `${formatDateBR(d.date).slice(0, 5)}: ${fmtQtd(d.qtd, l.decimal)}`).join(" · ")}</div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-3 space-y-2">
+            <div className="flex justify-between text-sm font-semibold"><span>➕ Pagamentos extras</span><span className="mono text-primary">{BRL(totalExtras)}</span></div>
+            {extras.length === 0 && <p className="text-[11px] text-muted-foreground">Nenhum pagamento extra nesta semana.</p>}
+            {extras.map((e) => (
+              <div key={e.id} className="flex items-center gap-2">
+                <Input value={e.descricao ?? ""} placeholder="Motivo (ex.: conserto do freezer)" className="h-9 text-xs flex-1"
+                  aria-label="Motivo do pagamento extra"
+                  onChange={(ev) => dispatch({ type: "SET_ITEM_SEMANA", item: { ...e, descricao: ev.target.value } })} />
+                <BufferedNumberInput value={e.valor} decimal placeholder="0,00" className="w-24 h-9" aria-label="Valor do pagamento extra"
+                  onChange={(n) => dispatch({ type: "SET_ITEM_SEMANA", item: { ...e, valor: n } })} />
+                <button type="button" aria-label="Excluir pagamento extra" className="text-muted-foreground hover:text-destructive px-1"
+                  onClick={() => confirm(`Excluir o pagamento extra "${e.descricao || "sem motivo"}"?`) && dispatch({ type: "REMOVE_ITEM_SEMANA", id: e.id })}>
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            <Button variant="secondary" className="w-full" onClick={addExtra}>+ Adicionar pagamento extra</Button>
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <Button variant="secondary" onClick={exportPDF}>📄 PDF</Button>
             <Button onClick={exportCSV}>📊 CSV</Button>
