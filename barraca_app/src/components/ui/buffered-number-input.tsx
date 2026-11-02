@@ -13,12 +13,13 @@ interface BufferedNumberInputProps {
   className?: string;
   readOnly?: boolean;
   disabled?: boolean;
+  "aria-label"?: string;
 }
 
 // Input numérico que mantém o texto digitado em um buffer local, evitando que o
 // valor seja reformatado a cada tecla (o que impedia digitar a vírgula decimal).
 export function BufferedNumberInput({
-  value, onChange, onBlur, decimal = true, placeholder, className, readOnly, disabled,
+  value, onChange, onBlur, decimal = true, placeholder, className, readOnly, disabled, "aria-label": ariaLabel,
 }: BufferedNumberInputProps) {
   const display = React.useCallback(
     (n: number) => (n ? (decimal ? num(n) : String(n)) : ""),
@@ -36,6 +37,7 @@ export function BufferedNumberInput({
       type="text"
       inputMode={decimal ? "decimal" : "numeric"}
       placeholder={placeholder}
+      aria-label={ariaLabel}
       readOnly={readOnly}
       disabled={disabled}
       value={text}
