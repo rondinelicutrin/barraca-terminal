@@ -2,9 +2,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, usaTurnoEPonto, veResultadoCaixa, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
+  useStore, usaTurnoEPonto, veResultadoCaixa, buscarHistoricoRecente, prevShift, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
+import { pendentesDoTipo } from "@/lib/fila";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -105,10 +106,16 @@ function StartShift() {
   const [abrindo, setAbrindo] = useState(false);
   const handleStart = async () => {
     if (!date) { alert("Selecione a data do turno."); return; }
-    // Confere no banco se alguém já abriu um turno (em outro aparelho) antes de abrir outro
+    // Confere no banco se alguém já abriu um turno (em outro aparelho) antes de abrir outro e traz os
+    // últimos fechamentos: a Entrada de cada produto é a sobra do turno anterior, que pode ter sido
+    // fechado em outro celular e ainda não ter chegado a este.
     setAbrindo(true);
     const aberto = await buscarTurnoAberto();
+    const recente = aberto ? undefined : await buscarHistoricoRecente();
     setAbrindo(false);
+    if (recente && pendentesDoTipo("turno").length === 0) {
+      dispatch({ type: "ATUALIZAR_HISTORICO_RECENTE", desde: recente.desde, historico: recente.historico });
+    }
     if (aberto) {
       if (turnoDeOutroFuncionario(state, aberto)) {
         dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: aberto }); // mostra a tela de acesso bloqueado
@@ -122,6 +129,16 @@ function StartShift() {
     if (exists) {
       alert(`O turno ${shiftLabel(shift)} de ${date.split("-").reverse().join("/")} já foi fechado.`);
       return;
+    }
+    // O turno anterior precisa estar fechado (é dele que vem a Entrada)
+    const ant = prevShift(date, shift);
+    const temAnterior = (recente?.historico ?? state.historico).some((t) => t.date === ant.date && t.shift === ant.shift);
+    if (!temAnterior && state.historico.length > 0) {
+      const ok = confirm(
+        `ATENÇÃO: o turno anterior (${shiftLabel(ant.shift).replace(/^[^\p{L}]+/u, "")} de ${ant.date.split("-").reverse().join("/")}) ainda não aparece FECHADO.\n\n` +
+        `A Entrada dos produtos vem da sobra dele. Se ele foi fechado em outro celular, peça para conferir a internet desse celular e tente de novo.\n\nAbrir mesmo assim?`
+      );
+      if (!ok) return;
     }
     // Aviso (não bloqueia): confirma que a pessoa está ciente de abrir com data diferente de hoje
     if (dataDiferente) {

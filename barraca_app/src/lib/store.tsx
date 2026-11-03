@@ -1107,7 +1107,7 @@ export function valorConsumoPonto(s: State, username: string, itens: { productId
   return Object.values(valoresConsumoPonto(s, username, itens)).reduce((a, b) => a + b, 0);
 }
 
-function prevShift(date: string, shift: ShiftKey): { date: string; shift: ShiftKey } {
+export function prevShift(date: string, shift: ShiftKey): { date: string; shift: ShiftKey } {
   if (shift === "tarde") return { date, shift: "manha" };
   if (shift === "noite") return { date, shift: "tarde" };
   // manha inherits noite of previous day
@@ -1139,6 +1139,12 @@ function sobrasDoHistorico(historico: Turno[]): Record<string, number> {
 // - turno lançado "para trás" (já existe fechamento mais novo): vale a sobra do período anterior a ele;
 // - se o estoque não existe neste aparelho, reconstrói pelas sobras do histórico.
 function entradaHerdada(s: State, date: string, shift: ShiftKey): (productId: string) => number {
+  // Regra: a Entrada é a SOBRA do turno imediatamente anterior (ex.: manhã de hoje = sobra da noite de
+  // ontem). Antes vinha primeiro do estoque guardado no aparelho, que podia estar desatualizado (o
+  // fechamento anterior feito em outro celular ainda não tinha chegado) e trazia a sobra de um turno antigo.
+  const prev = prevShift(date, shift);
+  const imediato = s.historico.find((t) => t.date === prev.date && t.shift === prev.shift);
+  if (imediato) return (pid) => imediato.items[pid]?.sobra ?? s.estoqueQtd[pid] ?? 0;
   const alvo = chavePeriodo({ date, shift });
   const anteriores = s.historico.filter((t) => chavePeriodo(t) < alvo).sort((a, b) => chavePeriodo(b).localeCompare(chavePeriodo(a)));
   const ref = anteriores[0];
@@ -1867,6 +1873,13 @@ async function buscarHistorico(desde?: string): Promise<Turno[]> {
   const itemsByTurno: Record<string, Record<string, ShiftItem>> = {};
   for (const ir of allItemRows ?? []) (itemsByTurno[ir.turno_id] ??= {})[ir.product_id] = shiftItemFromRow(ir);
   return histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
+}
+
+// Fechamentos dos últimos dias direto do banco (para abrir o turno com a sobra certa do anterior).
+// undefined = não deu para consultar.
+export async function buscarHistoricoRecente(dias = 7): Promise<{ desde: string; historico: Turno[] } | undefined> {
+  const desde = somarDiasISO(todayISO(), -dias);
+  try { return { desde, historico: await buscarHistorico(desde) }; } catch { return undefined; }
 }
 
 // Turno em andamento no banco (com os produtos). undefined = não deu para consultar (sem internet).
