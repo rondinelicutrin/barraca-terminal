@@ -3,13 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import {
   useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina, maqAbaixoDaBase, valorComparadoMaq,
-  turnoSeguinte, baseHerdadaMaq,
+  turnoSeguinte, baseHerdadaMaq, turnoAnteriorDe, herdarDoAnterior,
   type Turno, type ShiftItem,
 } from "@/lib/store";
 import { BRL, formatDateBR, shiftLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
+import { DatePickerBR } from "@/components/ui/date-picker-br";
 import { EntradasDoTurno, RelatorioSobrasBotoes } from "@/components/FechamentoTurno";
 import { entradasDoTurno } from "@/lib/relatorio-sobras";
 
@@ -57,7 +58,23 @@ function EditTurno() {
   const updMaq = (which: "maq1" | "maq2", patch: any) =>
     setLocal({ ...local, caixa: { ...local.caixa, [which]: { ...local.caixa[which], ...patch } } });
 
+  // Corrigir data/período (ex.: turno da manhã aberto como "Tarde" por engano)
+  const conflito = [...state.historico, ...(state.turnoAtivo ? [state.turnoAtivo] : [])]
+    .find((x) => x.id !== local.id && x.date === local.date && x.shift === local.shift);
+  const anterior = turnoAnteriorDe(state, local);
+  const refazerHeranca = () => {
+    if (!anterior) { alert("Não há turno fechado imediatamente anterior a este para copiar."); return; }
+    if (!confirm(`Copiar do turno anterior (${formatDateBR(anterior.date)} · ${shiftLabel(anterior.shift)}):\n\n` +
+      `• Entrada de cada produto = sobra dele\n• Dinheiro do caixa anterior = ${BRL((anterior.caixa.dinheiroFinal ?? 0) - (anterior.caixa.dinheiroMalote ?? 0))}\n` +
+      `• Moedas inicial = ${BRL(anterior.caixa.moedasFinal ?? 0)}\n• Valor anterior das maquininhas\n\nDepois toque em "Salvar alterações".`)) return;
+    setLocal(herdarDoAnterior(local, anterior));
+  };
+
   const save = () => {
+    if (conflito) {
+      alert(`Já existe um turno ${shiftLabel(local.shift)} em ${formatDateBR(local.date)}. Escolha outra data ou período.`);
+      return;
+    }
     const abaixo = (local.caixa.maq2Ativa ? (["maq1", "maq2"] as const) : (["maq1"] as const))
       .filter((m) => maqAbaixoDaBase(local.caixa[m], local.shift));
     // Para o funcionário essa regra trava; o dono (correção) pode confirmar e salvar assim mesmo
@@ -93,6 +110,32 @@ function EditTurno() {
     <Shell>
       <TopBar title={`${formatDateBR(local.date)} · ${shiftLabel(local.shift)}${isAtivo ? " · em andamento" : ""}`}
         right={<button onClick={() => nav({ to: "/owner/historico" })} className="text-xs text-muted-foreground">Voltar</button>} />
+      <div className="px-3 pt-3">
+        <div className="bg-card border border-border rounded-xl p-3 space-y-2">
+          <div className="text-sm font-semibold">📅 Data e período do turno</div>
+          <div className="grid grid-cols-2 gap-2 items-end">
+            <div><label className="text-xs text-muted-foreground">Data</label>
+              <div className="mt-1"><DatePickerBR value={local.date} onChange={(d) => setLocal({ ...local, date: d })} /></div></div>
+            <div className="grid grid-cols-3 gap-1">
+              {(["manha", "tarde", "noite"] as const).map((sh) => (
+                <button key={sh} type="button" onClick={() => setLocal({ ...local, shift: sh })}
+                  className={`h-10 rounded-md text-xs border ${local.shift === sh ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border text-muted-foreground"}`}>
+                  {sh === "manha" ? "Manhã" : sh === "tarde" ? "Tarde" : "Noite"}
+                </button>
+              ))}
+            </div>
+          </div>
+          {(local.date !== orig.date || local.shift !== orig.shift) && (
+            <p className={`text-[11px] ${conflito ? "text-destructive font-semibold" : "text-warning"}`}>
+              {conflito ? `Já existe um turno ${shiftLabel(local.shift)} em ${formatDateBR(local.date)}.`
+                : `Será salvo como ${shiftLabel(local.shift)} de ${formatDateBR(local.date)}. Se as entradas devem vir do turno anterior a este, use o botão abaixo.`}
+            </p>
+          )}
+          <Button variant="secondary" className="w-full" onClick={refazerHeranca} disabled={!anterior}>
+            ↺ Refazer entradas e caixa pelo turno anterior{anterior ? ` (${formatDateBR(anterior.date).slice(0, 5)} · ${shiftLabel(anterior.shift).replace(/^[^\p{L}]+/u, "")})` : ""}
+          </Button>
+        </div>
+      </div>
       <div className="p-3 grid grid-cols-2 gap-2">
         <button onClick={() => setTab("produtos")}
           className={`h-9 rounded-md text-sm ${tab === "produtos" ? "bg-primary text-primary-foreground" : "bg-card border border-border"}`}>Produtos</button>
