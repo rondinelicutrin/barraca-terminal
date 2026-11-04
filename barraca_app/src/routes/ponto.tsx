@@ -182,6 +182,15 @@ function PontoPage() {
       return;
     }
 
+    // Horário de entrada de um período diferente do turno aberto (ex.: turno da manhã e entrada às 14:00)
+    if (state.turnoAtivo && state.turnoAtivo.date === date) {
+      const p = state.turnoAtivo.shift === "manha" ? "Manhã" : state.turnoAtivo.shift === "tarde" ? "Tarde" : "Noite";
+      const fora = querPonto.filter((a) => periodoDoHorario(a.ent) !== p);
+      if (fora.length > 0 && !confirm(
+        `ATENÇÃO: o turno aberto é da ${p.toUpperCase()}, mas o horário de entrada é de outro período:\n\n` +
+        fora.map((a) => `• ${nomeDe(a.username)}: entrada ${a.ent} (${periodoDoHorario(a.ent).toUpperCase()})`).join("\n") +
+        `\n\nConfira o horário. Está certo?`)) return;
+    }
     if (dataDiferente) {
       const ok = confirm(
         `ATENÇÃO: VOCÊ ESTÁ REGISTRANDO COM A DATA ${dataBR}, DIFERENTE DE HOJE (${hoje.split("-").reverse().join("/")}).\n\nTEM CERTEZA QUE É ISSO MESMO?`
