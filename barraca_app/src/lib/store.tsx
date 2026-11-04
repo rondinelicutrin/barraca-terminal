@@ -1107,6 +1107,36 @@ export function valorConsumoPonto(s: State, username: string, itens: { productId
   return Object.values(valoresConsumoPonto(s, username, itens)).reduce((a, b) => a + b, 0);
 }
 
+// Período do dia pelo horário (mesma divisão usada no Ponto): antes das 12h manhã, até 17h tarde, depois noite
+export function periodoDoHorarioKey(hhmm: string): ShiftKey {
+  const [h, m] = hhmm.split(":").map(Number);
+  const min = (h || 0) * 60 + (m || 0);
+  return min < 12 * 60 ? "manha" : min < 17 * 60 ? "tarde" : "noite";
+}
+export const periodoAgora = (d = new Date()) => periodoDoHorarioKey(`${d.getHours()}:${d.getMinutes()}`);
+
+// Turno fechado imediatamente anterior a um turno (manhã ← noite de ontem, tarde ← manhã, noite ← tarde)
+export function turnoAnteriorDe(s: State, t: { id?: string; date: string; shift: ShiftKey }): Turno | undefined {
+  const p = prevShift(t.date, t.shift);
+  return s.historico.find((x) => x.id !== t.id && x.date === p.date && x.shift === p.shift);
+}
+
+// O que um turno herda do anterior: Entrada (sobra), dinheiro do caixa anterior, moedas e base das maquininhas
+export function herdarDoAnterior(t: Turno, ant: Turno): Turno {
+  const items: Record<string, ShiftItem> = {};
+  for (const [pid, it] of Object.entries(t.items)) items[pid] = { ...it, entrada: ant.items[pid]?.sobra ?? it.entrada };
+  return {
+    ...t, items,
+    caixa: {
+      ...t.caixa,
+      caixaFimPrev: (ant.caixa.dinheiroFinal ?? 0) - (ant.caixa.dinheiroMalote ?? 0),
+      moedasInicial: ant.caixa.moedasFinal ?? 0,
+      maq1: { ...t.caixa.maq1, base: baseHerdadaMaq(ant, "maq1") },
+      maq2: { ...t.caixa.maq2, base: ant.caixa.maq2Ativa ? baseHerdadaMaq(ant, "maq2") : t.caixa.maq2.base },
+    },
+  };
+}
+
 export function prevShift(date: string, shift: ShiftKey): { date: string; shift: ShiftKey } {
   if (shift === "tarde") return { date, shift: "manha" };
   if (shift === "noite") return { date, shift: "tarde" };

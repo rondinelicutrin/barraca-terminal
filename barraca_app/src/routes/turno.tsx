@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, usaTurnoEPonto, veResultadoCaixa, buscarHistoricoRecente, prevShift, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
+  useStore, usaTurnoEPonto, veResultadoCaixa, buscarHistoricoRecente, prevShift, periodoAgora, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { pendentesDoTipo } from "@/lib/fila";
@@ -78,7 +78,8 @@ function StartShift() {
   // Data compartilhada com o menu Ponto — evita lançamentos em datas diferentes entre os dois menus
   const date = state.selectedDate;
   const setDate = (d: string) => dispatch({ type: "SET_SELECTED_DATE", date: d });
-  const [shift, setShift] = useState<ShiftKey>("manha");
+  // Já vem marcado o período do horário atual (antes abria sempre em "Manhã")
+  const [shift, setShift] = useState<ShiftKey>(() => periodoAgora());
   const [outros, setOutros] = useState<string[]>([]);
 
   // Ao abrir a tela, a data volta a ser a de hoje (segundo o relógio do celular/computador) —
@@ -129,6 +130,13 @@ function StartShift() {
     if (exists) {
       alert(`O turno ${shiftLabel(shift)} de ${date.split("-").reverse().join("/")} já foi fechado.`);
       return;
+    }
+    // Período diferente do horário de agora (ex.: entrou de manhã e escolheu Tarde): confirma antes
+    const agoraP = periodoAgora();
+    if (date === hoje && shift !== agoraP) {
+      const hm = new Date().toTimeString().slice(0, 5);
+      const nome = (k: string) => (k === "manha" ? "MANHÃ" : k === "tarde" ? "TARDE" : "NOITE");
+      if (!confirm(`ATENÇÃO: agora são ${hm}, horário do turno da ${nome(agoraP)}.\n\nVocê escolheu o turno da ${nome(shift)}.\n\nTem certeza que é o turno da ${nome(shift)}?`)) return;
     }
     // O turno anterior precisa estar fechado (é dele que vem a Entrada)
     const ant = prevShift(date, shift);
