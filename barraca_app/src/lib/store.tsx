@@ -1111,12 +1111,45 @@ export function valorConsumoPonto(s: State, username: string, itens: { productId
 export function periodoDoHorarioKey(hhmm: string): ShiftKey {
   const [h, m] = hhmm.split(":").map(Number);
   const min = (h || 0) * 60 + (m || 0);
-  return min < 12 * 60 ? "manha" : min < 17 * 60 ? "tarde" : "noite";
+  // Madrugada (até 05:00) ainda é o turno da noite do dia anterior
+  return min < 5 * 60 ? "noite" : min < 12 * 60 ? "manha" : min < 17 * 60 ? "tarde" : "noite";
 }
 export const periodoAgora = (d = new Date()) => periodoDoHorarioKey(`${d.getHours()}:${d.getMinutes()}`);
+// Data do turno em andamento agora: de madrugada (até 05:00) é a noite de ONTEM
+export const dataDoTurnoAgora = (d = new Date()) => {
+  const p2 = (x: number) => String(x).padStart(2, "0");
+  const dia = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  return d.getHours() < 5 ? somarDiasISO(dia, -1) : dia;
+};
+
+// Último turno FECHADO de verdade (pelo horário de fechamento), opcionalmente fechado até um momento.
+export function ultimoFechado(s: State, ate?: number, excetoId?: string): Turno | undefined {
+  return s.historico
+    .filter((t) => t.id !== excetoId && t.closedAt != null && (ate == null || (t.closedAt as number) <= ate))
+    .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))[0];
+}
+
+// De qual turno um turno NOVO herda a Entrada (sobra), o caixa, as moedas e as maquininhas.
+// Turno de hoje/ontem: do último turno realmente FECHADO, pela ordem em que foram fechados — assim
+// uma data gravada errada (ex.: noite aberta depois da meia-noite com a data do dia seguinte) não faz
+// a manhã herdar da tarde. Turno lançado para uma data antiga (retroativo): do período anterior pela data.
+export const ehTurnoRecente = (date: string) => date >= somarDiasISO(todayISO(), -1);
+export function turnoAnteriorParaAbrir(s: State, date: string, shift: ShiftKey): Turno | undefined {
+  if (ehTurnoRecente(date)) {
+    const u = ultimoFechado(s);
+    if (u) return u;
+  }
+  const prev = prevShift(date, shift);
+  return findLastClosed(s, prev.date, prev.shift);
+}
 
 // Turno fechado imediatamente anterior a um turno (manhã ← noite de ontem, tarde ← manhã, noite ← tarde)
-export function turnoAnteriorDe(s: State, t: { id?: string; date: string; shift: ShiftKey }): Turno | undefined {
+export function turnoAnteriorDe(s: State, t: { id?: string; date: string; shift: ShiftKey; createdAt?: number }): Turno | undefined {
+  // O último fechado antes de este turno ser aberto (ordem real); sem horário de abertura, pela data
+  if (t.createdAt) {
+    const u = ultimoFechado(s, t.createdAt, t.id);
+    if (u) return u;
+  }
   const p = prevShift(t.date, t.shift);
   return s.historico.find((x) => x.id !== t.id && x.date === p.date && x.shift === p.shift);
 }
@@ -1172,8 +1205,7 @@ function entradaHerdada(s: State, date: string, shift: ShiftKey): (productId: st
   // Regra: a Entrada é a SOBRA do turno imediatamente anterior (ex.: manhã de hoje = sobra da noite de
   // ontem). Antes vinha primeiro do estoque guardado no aparelho, que podia estar desatualizado (o
   // fechamento anterior feito em outro celular ainda não tinha chegado) e trazia a sobra de um turno antigo.
-  const prev = prevShift(date, shift);
-  const imediato = s.historico.find((t) => t.date === prev.date && t.shift === prev.shift);
+  const imediato = turnoAnteriorParaAbrir(s, date, shift);
   if (imediato) return (pid) => imediato.items[pid]?.sobra ?? s.estoqueQtd[pid] ?? 0;
   const alvo = chavePeriodo({ date, shift });
   const anteriores = s.historico.filter((t) => chavePeriodo(t) < alvo).sort((a, b) => chavePeriodo(b).localeCompare(chavePeriodo(a)));
@@ -1208,24 +1240,21 @@ function syncEstoqueFromTurno(estoqueQtd: Record<string, number>, t: Turno): Rec
 }
 
 function previousCaixaFim(s: State, shift: ShiftKey, date: string): number {
-  const prev = prevShift(date, shift);
-  const t = findLastClosed(s, prev.date, prev.shift);
+  const t = turnoAnteriorParaAbrir(s, date, shift);
   if (!t) return 0;
   // dinheiroFinal - dinheiroMalote = dinheiro que ficou no caixa
   return (t.caixa.dinheiroFinal ?? 0) - (t.caixa.dinheiroMalote ?? 0);
 }
 
 function previousMoedasFinal(s: State, shift: ShiftKey, date: string): number {
-  const prev = prevShift(date, shift);
-  const t = findLastClosed(s, prev.date, prev.shift);
+  const t = turnoAnteriorParaAbrir(s, date, shift);
   return t ? (t.caixa.moedasFinal ?? 0) : 0;
 }
 
 function previousMaqBases(s: State, shift: ShiftKey, date: string): { maq1: number; maq2: number } {
   // Noite resets → base 0 for the "após 00:00" saved value... but we treat: base = last saved display value
   // Since noite saves "apos00" as final, next shift base = that value.
-  const prev = prevShift(date, shift);
-  const t = findLastClosed(s, prev.date, prev.shift);
+  const t = turnoAnteriorParaAbrir(s, date, shift);
   if (!t) return { maq1: 0, maq2: 0 };
   const savedFrom = (m: MaquininhaState, wasNoite: boolean) => wasNoite ? (m.apos00 ?? 0) : (m.display ?? 0);
   const wasNoite = t.shift === "noite";

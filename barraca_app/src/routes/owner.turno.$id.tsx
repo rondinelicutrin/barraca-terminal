@@ -113,7 +113,7 @@ function EditTurno() {
       <div className="px-3 pt-3">
         <div className="bg-card border border-border rounded-xl p-3 space-y-2">
           <div className="text-sm font-semibold">📅 Data e período do turno</div>
-          <div className="grid grid-cols-2 gap-2 items-end">
+          <div className="space-y-2">
             <div><label className="text-xs text-muted-foreground">Data</label>
               <div className="mt-1"><DatePickerBR value={local.date} onChange={(d) => setLocal({ ...local, date: d })} /></div></div>
             <div className="grid grid-cols-3 gap-1">
@@ -131,7 +131,7 @@ function EditTurno() {
                 : `Será salvo como ${shiftLabel(local.shift)} de ${formatDateBR(local.date)}. Se as entradas devem vir do turno anterior a este, use o botão abaixo.`}
             </p>
           )}
-          <Button variant="secondary" className="w-full" onClick={refazerHeranca} disabled={!anterior}>
+          <Button variant="secondary" className="w-full h-auto min-h-10 whitespace-normal py-2" onClick={refazerHeranca} disabled={!anterior}>
             ↺ Refazer entradas e caixa pelo turno anterior{anterior ? ` (${formatDateBR(anterior.date).slice(0, 5)} · ${shiftLabel(anterior.shift).replace(/^[^\p{L}]+/u, "")})` : ""}
           </Button>
         </div>
