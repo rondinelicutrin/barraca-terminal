@@ -2,10 +2,11 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell, TopBar, BottomNav, TurnoBloqueado, useBloqueioTurno, turnoDeOutroFuncionario } from "@/components/Shell";
 import {
-  useStore, usaTurnoEPonto, veResultadoCaixa, buscarHistoricoRecente, prevShift, periodoAgora, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
+  useStore, usaTurnoEPonto, veResultadoCaixa, buscarHistoricoRecente, prevShift, periodoAgora, dataDoTurnoAgora, ultimoFechado as ultimoTurnoFechado, ehTurnoRecente, getAllProducts, vendeu, sobraOverflow, esperadoTurno, saidasSemVenda, disponivelItem, buscarTurnoAberto,
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { pendentesDoTipo } from "@/lib/fila";
+import { somarDias } from "@/lib/folha";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -85,11 +86,12 @@ function StartShift() {
   // Ao abrir a tela, a data volta a ser a de hoje (segundo o relógio do celular/computador) —
   // evita começar um turno "preso" numa data antiga esquecida de uma sessão anterior.
   useEffect(() => {
-    dispatch({ type: "SET_SELECTED_DATE", date: todayISO() });
+    // De madrugada (até 05:00) o turno é a NOITE de ontem: já vem com a data de ontem
+    dispatch({ type: "SET_SELECTED_DATE", date: dataDoTurnoAgora() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hoje = todayISO();
+  const hoje = dataDoTurnoAgora();
 
   // Último turno fechado — fica acessível aqui para gerar de novo o relatório de sobras
   // (caso a tela de "Turno fechado" tenha sido fechada ou a página recarregada)
@@ -138,10 +140,25 @@ function StartShift() {
       const nome = (k: string) => (k === "manha" ? "MANHÃ" : k === "tarde" ? "TARDE" : "NOITE");
       if (!confirm(`ATENÇÃO: agora são ${hm}, horário do turno da ${nome(agoraP)}.\n\nVocê escolheu o turno da ${nome(shift)}.\n\nTem certeza que é o turno da ${nome(shift)}?`)) return;
     }
-    // O turno anterior precisa estar fechado (é dele que vem a Entrada)
+    // A Entrada, o caixa e as maquininhas vêm do último turno FECHADO. Se ele não é o período esperado
+    // (ex.: noite gravada com outra data), mostra de qual turno vai herdar antes de abrir.
     const ant = prevShift(date, shift);
-    const temAnterior = (recente?.historico ?? state.historico).some((t) => t.date === ant.date && t.shift === ant.shift);
-    if (!temAnterior && state.historico.length > 0) {
+    const hist = recente?.historico ?? state.historico;
+    const temAnterior = hist.some((t) => t.date === ant.date && t.shift === ant.shift);
+    const ult = ultimoTurnoFechado({ ...state, historico: recente ? [...recente.historico, ...state.historico.filter((t) => t.date < recente.desde)] : state.historico });
+    const rot = (k: string) => shiftLabel(k).replace(/^[^\p{L}]+/u, "");
+    // Pular um período é normal (turnos de 12h: 07–19 "Manhã" e 19–07 "Noite", sem Tarde): só avisa se o
+    // último fechado está fora de ordem (ex.: data gravada errada) ou é antigo (falta um fechamento).
+    const ordem: Record<string, number> = { manha: 0, tarde: 1, noite: 2 };
+    const chave = (d: string, sh: string) => `${d}#${ordem[sh] ?? 9}`;
+    const sequenciaOk = !!ult && chave(ult.date, ult.shift) < chave(date, shift) && ult.date >= somarDias(date, -1);
+    if (!temAnterior && ult && ehTurnoRecente(date) && !sequenciaOk) {
+      const quando = ult.closedAt ? new Date(ult.closedAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+      if (!confirm(
+        `ATENÇÃO: o turno anterior esperado (${rot(ant.shift)} de ${ant.date.split("-").reverse().join("/")}) não aparece com essa data.\n\n` +
+        `O último turno FECHADO foi ${rot(ult.shift).toUpperCase()} de ${ult.date.split("-").reverse().join("/")}${quando ? ` (fechado em ${quando})` : ""}.\n` +
+        `A Entrada, o caixa e as maquininhas virão DELE.\n\nSe a data dele estiver errada, peça ao administrador para corrigir no Histórico. Abrir mesmo assim?`)) return;
+    } else if (!temAnterior && !sequenciaOk && state.historico.length > 0) {
       const ok = confirm(
         `ATENÇÃO: o turno anterior (${shiftLabel(ant.shift).replace(/^[^\p{L}]+/u, "")} de ${ant.date.split("-").reverse().join("/")}) ainda não aparece FECHADO.\n\n` +
         `A Entrada dos produtos vem da sobra dele. Se ele foi fechado em outro celular, peça para conferir a internet desse celular e tente de novo.\n\nAbrir mesmo assim?`
