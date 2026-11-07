@@ -38,16 +38,29 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
 export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
   const { state } = useStore();
   if (!turno.closedAt) return <AvisoTurnoAberto />;
-  const gerar = (formato: "pdf" | "csv") => {
-    // Funcionário comum baixa a versão às cegas (sem resultado e sem valores de venda)
-    const f = montarFechamentoImpresso(turno, state, veResultadoCaixa(state.currentUser));
+  const admin = veResultadoCaixa(state.currentUser);
+  // completo = com resultado e valores (só dono/administrador); senão a versão às cegas do funcionário
+  const gerar = (formato: "pdf" | "csv", completo: boolean) => {
+    const f = montarFechamentoImpresso(turno, state, completo);
     if (formato === "pdf") baixarFechamentoPdf(f);
     else baixarFechamentoCsv(f);
   };
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <Button onClick={() => gerar("pdf")}>📄 Fechamento (PDF)</Button>
-      <Button variant="secondary" onClick={() => gerar("csv")}>📊 Fechamento (CSV)</Button>
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <Button onClick={() => gerar("pdf", admin)}>📄 Fechamento (PDF)</Button>
+        <Button variant="secondary" onClick={() => gerar("csv", admin)}>📊 Fechamento (CSV)</Button>
+      </div>
+      {/* Dono/administrador também baixa o modelo do funcionário (sem valores), para reenviar depois de corrigir */}
+      {admin && (
+        <div className="space-y-1">
+          <div className="text-[11px] text-muted-foreground">👤 Modelo do funcionário (sem resultado e sem valores):</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" onClick={() => gerar("pdf", false)}>📄 PDF do funcionário</Button>
+            <Button variant="secondary" onClick={() => gerar("csv", false)}>📊 CSV do funcionário</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
