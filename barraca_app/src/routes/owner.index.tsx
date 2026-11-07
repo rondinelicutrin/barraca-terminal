@@ -171,9 +171,10 @@ function Dashboard() {
         </div>
 
         <div>
-          <h2 className="text-sm font-semibold mb-2">Turnos recentes</h2>
+          {/* Todos os turnos do período escolhido (antes só os 10 mais recentes: numa semana, os primeiros dias sumiam) */}
+          <h2 className="text-sm font-semibold mb-2">Turnos do período <span className="font-normal text-muted-foreground">({filtered.length})</span></h2>
           <div className="space-y-2">
-            {filtered.slice(0, 10).map((t) => {
+            {filtered.map((t) => {
               const arrec = arrecadadoTurno(t);
               const diff = arrec - esperadoTurno(t, products);
               const status = statusTurno(t, products);
