@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
+import { ConsumoTurnoEditor } from "@/components/ConsumoTurnoEditor";
 import { EntradasDoTurno, RelatorioSobrasBotoes } from "@/components/FechamentoTurno";
 import { entradasDoTurno } from "@/lib/relatorio-sobras";
 
@@ -135,6 +136,9 @@ function EditTurno() {
             ↺ Refazer entradas e caixa pelo turno anterior{anterior ? ` (${formatDateBR(anterior.date).slice(0, 5)} · ${shiftLabel(anterior.shift).replace(/^[^\p{L}]+/u, "")})` : ""}
           </Button>
         </div>
+      </div>
+      <div className="px-3 pt-3">
+        <ConsumoTurnoEditor local={local} setLocal={setLocal} isAtivo={isAtivo} />
       </div>
       <div className="p-3 grid grid-cols-2 gap-2">
         <button onClick={() => setTab("produtos")}
