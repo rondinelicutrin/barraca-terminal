@@ -20,6 +20,7 @@ export interface LinhaProduto {
   vendidos: number; // total − sobra − consumo − descarte
   valor: number | null; // vendidos × preço (null = produto que não é vendido, ex.: casquinha crua)
   decimal?: boolean;
+  baixo?: boolean; // sobra no fechamento igual ou abaixo do "Alerta em" (estoque mínimo) do produto
 }
 export interface GrupoProdutos {
   titulo: string; linhas: LinhaProduto[];
@@ -84,6 +85,7 @@ export function montarFechamentoImpresso(turno: Turno, state: State, completo = 
       if (valor) totalVendido += valor;
       return {
         produto: p.name, entrada: it.entrada || 0, chegada: it.chegada ?? 0, sobra: it.sobra ?? null,
+        baixo: (state.estoqueMinimo[p.id] ?? 0) > 0 && (it.sobra ?? 0) <= (state.estoqueMinimo[p.id] ?? 0),
         consumo: (it.consumo || 0) + (it.consumoEst || 0), descarte: it.descarte || 0,
         total: (it.entrada || 0) + (it.chegada ?? 0), vendidos: vend, valor, decimal: p.decimal,
       };
@@ -250,6 +252,7 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
   y += 6;
 
   // 4- Vendidos no turno, produto a produto
+  const yTituloVendidos = y;
   y = titulo(sec(`Vendidos no turno (${f.turnoNome})`), y);
   const colunas = colunasVendidos(f.completo);
   const wProd = 150, wCol = (larg - wProd) / (colunas.length - 1);
@@ -262,8 +265,27 @@ export function gerarFechamentoPdfDoc(f: FechamentoImpresso): jsPDF {
     doc.line(M, yy, M + larg, yy);
     doc.setLineDashPattern([], 0); doc.setLineWidth(0.57);
   };
+  // Triângulo pequeno de alerta (estoque baixo), desenhado porque a fonte do PDF não tem o símbolo ⚠
+  const triangulo = (x: number, yy: number) => {
+    const t = Math.max(4, fs * 0.75);
+    doc.setFillColor(214, 120, 0);
+    doc.triangle(x, yy, x + t, yy, x + t / 2, yy - t * 0.9, "F");
+  };
+  const temBaixo = f.grupos.some((g) => g.linhas.some((l) => l.baixo));
+  if (temBaixo) {
+    const leg = "estoque baixo";
+    doc.setFont("helvetica", "normal"); doc.setFontSize(fs);
+    const wLeg = doc.getTextWidth(leg);
+    texto(leg, M + larg - 4, yTituloVendidos, { align: "right", cor: 90 });
+    triangulo(M + larg - 4 - wLeg - Math.max(4, fs * 0.75) - 3, yTituloVendidos);
+  }
   const linhaProduto = (l: LinhaProduto, bold = false) => {
-    texto(l.produto.length > 34 ? l.produto.slice(0, 33) + "…" : l.produto, xCol(0), y, { bold });
+    const nomeP = l.produto.length > 34 ? l.produto.slice(0, 33) + "…" : l.produto;
+    texto(nomeP, xCol(0), y, { bold });
+    if (l.baixo) {
+      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(fs);
+      triangulo(xCol(0) + doc.getTextWidth(textoParaPdf(nomeP)) + 3, y);
+    }
     linhaColunas(l, f.completo).forEach((c, i) => texto(c, xCol(i + 1), y, { align: "right", bold, cor: !bold && (c === "0" || c === "-") ? 150 : 0 }));
     if (!bold) pontilhado(y + lh * 0.3);
     y += lh;
@@ -330,9 +352,10 @@ export function linhasFechamentoCsv(f: FechamentoImpresso): (string | number)[][
     ...f.base.maquininhas.map((m) => [s(m.nome), v(m.anterior), v(m.lancado), ...(m.apos00 != null ? [v(m.apos00)] : []), v(m.real)]),
     [],
     [sec(`VENDIDOS NO TURNO (${f.turnoNome.toUpperCase()})`)],
+    ...(f.grupos.some((g) => g.linhas.some((l) => l.baixo)) ? [["⚠ = estoque baixo (sobra igual ou abaixo do mínimo cadastrado em Produtos)"]] : []),
     colunasVendidos(f.completo),
   ];
-  const linhaCsv = (l: LinhaProduto) => [s(l.produto), q(l.entrada), q(l.chegada), q(l.sobra), q(l.consumo), q(l.descarte), q(l.total), q(l.vendidos),
+  const linhaCsv = (l: LinhaProduto) => [s(l.baixo ? `⚠ ${l.produto} (estoque baixo)` : l.produto), q(l.entrada), q(l.chegada), q(l.sobra), q(l.consumo), q(l.descarte), q(l.total), q(l.vendidos),
     ...(f.completo ? [v(l.valor)] : [])];
   for (const g of f.grupos) {
     linhas.push([g.titulo.toUpperCase()]);
