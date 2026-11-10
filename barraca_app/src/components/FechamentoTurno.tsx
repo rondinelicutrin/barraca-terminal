@@ -1,10 +1,11 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { useStore, veResultadoCaixa, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
+import { useStore, veResultadoCaixa, turnoFechadoNoBanco, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
+import { processar } from "@/lib/fila";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
 import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA, consumoPorPessoaDoTurno } from "@/lib/fechamento-impresso";
@@ -37,27 +38,48 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
 // funcionários geravam e enviavam o relatório e esqueciam de fechar o turno.
 export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
   const { state } = useStore();
-  if (!turno.closedAt) return <AvisoTurnoAberto />;
   const admin = veResultadoCaixa(state.currentUser);
-  // completo = com resultado e valores (só dono/administrador); senão a versão às cegas do funcionário
-  const gerar = (formato: "pdf" | "csv", completo: boolean) => {
+  const [conferindo, setConferindo] = useState(false);
+  const [naoChegou, setNaoChegou] = useState<"" | "pendente" | "sem-internet">("");
+  if (!turno.closedAt) return <AvisoTurnoAberto />;
+  // completo = com resultado e valores (só dono/administrador); senão a versão às cegas do funcionário.
+  // Só gera depois que o SISTEMA confirma o turno fechado: o fechamento fica guardado no celular se
+  // estiver sem internet (ou se o app foi fechado antes de enviar), e o relatório saía mesmo assim.
+  const gerar = async (formato: "pdf" | "csv", completo: boolean) => {
+    setConferindo(true);
+    await processar(); // tenta enviar o que estiver na fila antes de conferir
+    const fechado = await turnoFechadoNoBanco(turno.id);
+    setConferindo(false);
+    if (fechado !== true) { setNaoChegou(fechado === undefined ? "sem-internet" : "pendente"); return; }
+    setNaoChegou("");
     const f = montarFechamentoImpresso(turno, state, completo);
     if (formato === "pdf") baixarFechamentoPdf(f);
     else baixarFechamentoCsv(f);
   };
   return (
     <div className="space-y-2">
+      {naoChegou && (
+        <div role="alert" className="bg-destructive/10 border-2 border-destructive rounded-xl p-3 space-y-1">
+          <div className="text-sm font-bold text-destructive">
+            {naoChegou === "sem-internet" ? "⚠️ SEM INTERNET: não deu para confirmar o fechamento" : "⚠️ O FECHAMENTO AINDA NÃO CHEGOU AO SISTEMA"}
+          </div>
+          <p className="text-xs">
+            O relatório só pode ser gerado e enviado depois que o fechamento do turno chegar ao sistema. Deixe o app aberto,
+            confira a internet e toque de novo no botão do relatório.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
-        <Button onClick={() => gerar("pdf", admin)}>📄 Fechamento (PDF)</Button>
-        <Button variant="secondary" onClick={() => gerar("csv", admin)}>📊 Fechamento (CSV)</Button>
+        <Button disabled={conferindo} onClick={() => gerar("pdf", admin)}>{conferindo ? "Conferindo…" : "📄 Fechamento (PDF)"}</Button>
+        <Button disabled={conferindo} variant="secondary" onClick={() => gerar("csv", admin)}>📊 Fechamento (CSV)</Button>
       </div>
       {/* Dono/administrador também baixa o modelo do funcionário (sem valores), para reenviar depois de corrigir */}
       {admin && (
         <div className="space-y-1">
           <div className="text-[11px] text-muted-foreground">👤 Modelo do funcionário (sem resultado e sem valores):</div>
           <div className="grid grid-cols-2 gap-2">
-            <Button variant="secondary" onClick={() => gerar("pdf", false)}>📄 PDF do funcionário</Button>
-            <Button variant="secondary" onClick={() => gerar("csv", false)}>📊 CSV do funcionário</Button>
+            <Button variant="secondary" disabled={conferindo} onClick={() => gerar("pdf", false)}>📄 PDF do funcionário</Button>
+            <Button variant="secondary" disabled={conferindo} onClick={() => gerar("csv", false)}>📊 CSV do funcionário</Button>
           </div>
         </div>
       )}

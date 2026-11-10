@@ -1942,6 +1942,13 @@ export async function buscarHistoricoRecente(dias = 7): Promise<{ desde: string;
 }
 
 // Turno em andamento no banco (com os produtos). undefined = não deu para consultar (sem internet).
+// O sistema (banco) já tem este turno FECHADO? undefined = não deu para consultar (sem internet).
+export async function turnoFechadoNoBanco(id: string): Promise<boolean | undefined> {
+  const { data, error } = await supabase.from("turnos").select("closed_at").eq("id", id).limit(1);
+  if (error) return undefined;
+  return !!data?.[0]?.closed_at;
+}
+
 export async function buscarTurnoAberto(): Promise<Turno | null | undefined> {
   const { data, error } = await supabase.from("turnos").select("*").is("closed_at", null)
     .order("created_at", { ascending: false }).limit(1);
