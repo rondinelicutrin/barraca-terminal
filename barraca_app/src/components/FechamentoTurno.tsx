@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { useStore, veResultadoCaixa, turnoFechadoNoBanco, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
+import { useState } from "react";
+import { useStore, veResultadoCaixa, turnoFechadoNoBanco, getAllProducts, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
@@ -36,9 +36,11 @@ export function camposObrigatoriosDoTurno(t: Turno, taxas: TaxasMaquininha): { k
 // Dois botões (PDF e CSV) com o fechamento geral do turno, numa folha só.
 // Regra: o relatório só existe depois de o turno ser FECHADO (botão "Fechar turno" no menu Ponto). Antes,
 // funcionários geravam e enviavam o relatório e esqueciam de fechar o turno.
-export function RelatorioSobrasBotoes({ turno }: { turno: Turno }) {
+// cego = telas de Turno e Ponto: até o funcionário cadastrado como Administrador só gera a versão sem
+// resultado (esperado, arrecadado, diferença); a versão completa fica no Painel (Histórico → ✏️).
+export function RelatorioSobrasBotoes({ turno, cego = false }: { turno: Turno; cego?: boolean }) {
   const { state } = useStore();
-  const admin = veResultadoCaixa(state.currentUser);
+  const admin = !cego && veResultadoCaixa(state.currentUser);
   const [conferindo, setConferindo] = useState(false);
   const [naoChegou, setNaoChegou] = useState<"" | "pendente" | "sem-internet">("");
   if (!turno.closedAt) return <AvisoTurnoAberto />;
@@ -197,11 +199,7 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
   const { state, dispatch } = useStore();
   const t = state.turnoAtivo;
   const products = getAllProducts(state);
-  const esperado = useMemo(() => (t ? esperadoTurno(t, products, true) : 0), [t, products]);
-  const arrecadado = useMemo(() => (t ? arrecadadoTurno(t) : 0), [t]);
   if (!t) return null;
-  const diff = arrecadado - esperado;
-  const admin = veResultadoCaixa(state.currentUser);
   const { situacao, semPonto } = situacaoPonto(state, t);
   const [perguntando, setPerguntando] = useState(false);
   // O que já foi lançado de consumo e descarte no turno (mostrado na pergunta final para ninguém esquecer)
@@ -311,25 +309,9 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
         </p>
       )}
 
-      {!admin ? (
-        <p className="border-t border-border pt-2 text-xs text-muted-foreground text-center">
-          🔒 Confira se lançou tudo certo. O resultado do caixa é conferido pelo administrador.
-        </p>
-      ) : (
-      <div className="border-t border-border pt-2 space-y-1">
-        <Row label="Esperado"   value={BRL(esperado)} />
-        <Row label="Arrecadado" value={BRL(arrecadado)} />
-        <Row label="Diferença"  value={BRL(diff)}
-          valueClass={Math.abs(diff) < 0.5 ? "text-success" : diff > 0 ? "text-warning" : "text-destructive"} />
-        <div className="pt-1 text-center text-sm">
-          {Math.abs(diff) < 0.5
-            ? <span className="text-success">✓ Caixa conferido!</span>
-            : diff > 0
-              ? <span className="text-warning">Sobra de {BRL(diff)}</span>
-              : <span className="text-destructive">⚠ Faltam {BRL(-diff)}</span>}
-        </div>
-      </div>
-      )}
+      <p className="border-t border-border pt-2 text-xs text-muted-foreground text-center">
+        🔒 Confira se lançou tudo certo. O resultado do caixa é conferido pelo administrador no Painel.
+      </p>
 
       <Button className="w-full" onClick={closeShift}>Fechar turno</Button>
       <Dialog open={perguntando} onOpenChange={setPerguntando}>
@@ -394,8 +376,8 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
           </div>
         </div>
 
-        {/* Funcionário: só a falta é sinalizada, sem valores (caixa certo ou com sobra não mostram nada) */}
-        {!veResultadoCaixa(state.currentUser) && temFaltaNoCaixa(rel.diferenca) && (
+        {/* Telas de Turno/Ponto (inclusive para o Administrador): só a falta é sinalizada, sem valores (caixa certo ou com sobra não mostram nada) */}
+        {temFaltaNoCaixa(rel.diferenca) && (
           <div role="alert" className="bg-destructive/10 border-2 border-destructive rounded-xl p-3 flex gap-3 items-start">
             <div className="text-2xl leading-none">⚠️</div>
             <div className="text-sm">
@@ -403,16 +385,6 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
               <div className="text-xs text-muted-foreground mt-0.5">{ALERTA_FALTA[1]}</div>
             </div>
           </div>
-        )}
-        {veResultadoCaixa(state.currentUser) && (
-        <div className="bg-card border border-border rounded-xl p-3 space-y-1">
-          <div className="text-sm font-medium mb-1">Resultado do turno</div>
-          <Row label="Esperado" value={BRL(rel.esperado)} />
-          <Row label="Arrecadado" value={BRL(rel.arrecadado)} />
-          <Row label="Diferença" value={BRL(rel.diferenca)}
-            valueClass={Math.abs(rel.diferenca) < 0.5 ? "text-success" : rel.diferenca > 0 ? "text-warning" : "text-destructive"} />
-          <div className="text-center text-sm pt-1">{rel.situacao}</div>
-        </div>
         )}
 
         <div className="bg-card border border-border rounded-xl p-3">
@@ -465,11 +437,9 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
         <div className="bg-card border border-border rounded-xl p-3 space-y-2">
           <div className="text-sm font-medium">Relatório do fechamento (caixa, maquininhas, consumos e sobras)</div>
           <p className="text-[11px] text-muted-foreground">
-            {veResultadoCaixa(state.currentUser)
-              ? "Inclui o resultado (esperado × arrecadado), dinheiro, moedas, pix, maquininhas, vendidos de cada produto com os valores e o consumo dos funcionários."
-              : "Inclui dinheiro, moedas, pix, maquininhas, entrada, sobra e vendidos de cada produto e o consumo. Gere o arquivo e envie para o dono."}
+            Inclui dinheiro, moedas, pix, maquininhas, entrada, sobra e vendidos de cada produto e o consumo. Gere o arquivo e envie para o dono.
           </p>
-          <RelatorioSobrasBotoes turno={turno} />
+          <RelatorioSobrasBotoes turno={turno} cego />
         </div>
         <Button variant="secondary" className="w-full" onClick={onVoltar}>Voltar</Button>
       </div>

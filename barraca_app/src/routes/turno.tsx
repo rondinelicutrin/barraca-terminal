@@ -238,7 +238,7 @@ function StartShift() {
               <div className="text-xs text-muted-foreground">
                 {shiftLabel(ultimoFechado.shift)} · {ultimoFechado.date.split("-").reverse().join("/")}
               </div>
-              <RelatorioSobrasBotoes turno={ultimoFechado} />
+              <RelatorioSobrasBotoes turno={ultimoFechado} cego />
             </>
           ) : (
             <p className="text-xs text-muted-foreground">
@@ -338,7 +338,7 @@ function ActiveShift() {
       {/* O fechamento (Esperado / Arrecadado / Diferença) agora fica no menu Ponto */}
       <div className="px-3 pb-4 space-y-3">
         {/* Relatório só depois de fechar: antes dava para gerar e enviar o relatório com o turno ainda aberto */}
-        <RelatorioSobrasBotoes turno={t} />
+        <RelatorioSobrasBotoes turno={t} cego />
         <div className={`rounded-xl p-3 text-center border-2 ${semPonto.length > 0 ? "bg-destructive/10 border-destructive" : "bg-card border-border"}`}>
           <p className={`text-xs font-extrabold uppercase leading-snug ${semPonto.length > 0 ? "text-destructive" : "text-muted-foreground"}`}>
             {semPonto.length > 0
