@@ -122,6 +122,16 @@ const TAXAS_PADRAO: TaxasMaquininha = { maq1: 0, maq2: 0 };
 
 // Monta o relatório de UM turno: sobras dos produtos (por categoria), fechamento do caixa (dinheiro,
 // moedas, pix, maquininhas), consumos, esperado × arrecadado e quem abriu/fechou.
+// Saídas do caixa do turno agrupadas por nome: [nome, quantas vezes, valor total]
+export function saidasAgrupadas(turno: Turno): [string, number, number][] {
+  const m = new Map<string, [number, number]>();
+  for (const x of turno.saidas ?? []) {
+    const [q, v] = m.get(x.nome) ?? [0, 0];
+    m.set(x.nome, [q + 1, v + x.valor]);
+  }
+  return [...m.entries()].map(([nome, [q, v]]) => [nome, q, v]);
+}
+
 export function montarRelatorioSobras(
   turno: Turno, products: Product[], funcionarios: Funcionario[], taxas: TaxasMaquininha = TAXAS_PADRAO,
 ): RelatorioSobras {
@@ -151,6 +161,9 @@ export function montarRelatorioSobras(
     ["Dinheiro final (contado)", c.dinheiroFinal || 0],
     ["Dinheiro malote (enviado ao dono)", c.dinheiroMalote || 0],
     ["Fica no caixa", dinheiroNoCaixa(c)],
+    // Dinheiro tirado do caixa para pagar despesas (ex.: limpeza da praça): soma no Arrecadado, não é falta
+    ...saidasAgrupadas(turno).map(([nome, qtd, valor]): [string, number] =>
+      [`Saída do caixa: ${nome.length > 30 ? nome.slice(0, 29) + "…" : nome}${qtd > 1 ? ` (${qtd}x)` : ""}`, valor]),
     ["Moedas inicial", c.moedasInicial || 0],
     ["Moedas final", c.moedasFinal || 0],
     ["Pix manual", c.pix || 0],
