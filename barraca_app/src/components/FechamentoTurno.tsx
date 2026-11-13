@@ -342,6 +342,7 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
               {consumoLancado.length > 0 && <div className="text-[11px] text-muted-foreground">Total no estoque do turno: {consumoLancado.join(", ")}</div>}
               {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
               {listaLancados("Descarte", descarteLancado, "nenhum lançado")}
+              {(t.saidas ?? []).length > 0 && listaLancados("Saídas do caixa", (t.saidas ?? []).map((x) => `${x.nome} ${BRL(x.valor)}`), "")}
             </div>
             <p className="font-semibold">
               Todo o CONSUMO (de cada funcionário e da barraca) e todos os DESCARTES (pastel que caiu, queimou ou estragou) deste turno já foram lançados?

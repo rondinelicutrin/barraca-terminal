@@ -14,8 +14,9 @@ import { Trash2 } from "lucide-react";
 import type { Category, Product } from "@/lib/products";
 import { useFiltro } from "@/lib/filtros";
 import { PeriodoComSemana } from "@/components/PeriodoComSemana";
+import { DespesasCaixaEditor } from "@/components/SaidasCaixa";
 
-type ProdutosTab = Category | "consumo";
+type ProdutosTab = Category | "consumo" | "saidas";
 
 const CATS: { key: ProdutosTab; label: string }[] = [
   { key: "pastel", label: "Pastel" },
@@ -23,12 +24,13 @@ const CATS: { key: ProdutosTab; label: string }[] = [
   { key: "bebida", label: "Bebidas" },
   { key: "outros", label: "Outros" },
   { key: "consumo", label: "Consumo func." },
+  { key: "saidas", label: "💸 Saídas do caixa" },
 ];
 
 export const Route = createFileRoute("/owner/produtos")({
   component: Produtos,
   validateSearch: (search: Record<string, unknown>): { tab?: ProdutosTab } => ({
-    tab: (["pastel", "caldo", "bebida", "outros", "consumo"] as const).includes(search.tab as ProdutosTab)
+    tab: (["pastel", "caldo", "bebida", "outros", "consumo", "saidas"] as const).includes(search.tab as ProdutosTab)
       ? (search.tab as ProdutosTab)
       : undefined,
   }),
@@ -47,7 +49,7 @@ function Produtos() {
   const [saleable, setSaleable] = useState(true);
 
   const addProduct = () => {
-    if (tab === "consumo") return;
+    if (tab === "consumo" || tab === "saidas") return;
     if (!nome) return alert("Digite o nome do produto.");
     const b: Product = {
       id: `${tab}_x_${Date.now()}`,
@@ -72,6 +74,8 @@ function Produtos() {
 
       {tab === "consumo" ? (
         <ConsumoFuncionarios products={products} />
+      ) : tab === "saidas" ? (
+        <DespesasCaixaEditor />
       ) : (
         <div className="p-3 space-y-2">
           <p className="text-[11px] text-muted-foreground -mt-1 mb-1">
