@@ -249,8 +249,9 @@ type Action =
   | { type: "DELETE_TURNO"; id: string }
   | { type: "EDIT_HIST"; id: string; turno: Turno }
   | { type: "EDIT_ATIVO"; turno: Turno }
-  // Dono: corrige só o "valor do turno anterior" (base) das maquininhas de um turno (sem mexer no estoque)
-  | { type: "AJUSTAR_BASE_MAQ"; id: string; bases: { maq1?: number; maq2?: number } }
+  // Dono corrigiu um turno fechado: repassa ao turno seguinte o que ele herdou (dinheiro do caixa anterior,
+  // moedas inicial, valor anterior das maquininhas e a entrada dos produtos), sem mexer no estoque
+  | { type: "AJUSTAR_HERANCA"; id: string; bases?: { maq1?: number; maq2?: number }; caixaFimPrev?: number; moedasInicial?: number; entradas?: Record<string, number> }
   | { type: "ADD_FUNC"; f: Funcionario }
   | { type: "REMOVE_FUNC"; id: string }
   | { type: "UPDATE_FUNC"; id: string; patch: Partial<Funcionario> }
@@ -841,16 +842,23 @@ function reducer(s: State, a: Action): State {
       };
       break;
     }
-    case "AJUSTAR_BASE_MAQ": {
-      const ajustar = (t: Turno): Turno => ({
-        ...t,
-        editado: true,
-        caixa: {
-          ...t.caixa,
-          maq1: a.bases.maq1 != null ? { ...t.caixa.maq1, base: a.bases.maq1 } : t.caixa.maq1,
-          maq2: a.bases.maq2 != null ? { ...t.caixa.maq2, base: a.bases.maq2 } : t.caixa.maq2,
-        },
-      });
+    case "AJUSTAR_HERANCA": {
+      const ajustar = (t: Turno): Turno => {
+        const items = { ...t.items };
+        for (const [pid, entrada] of Object.entries(a.entradas ?? {})) if (items[pid]) items[pid] = { ...items[pid], entrada };
+        return {
+          ...t,
+          editado: true,
+          items,
+          caixa: {
+            ...t.caixa,
+            caixaFimPrev: a.caixaFimPrev ?? t.caixa.caixaFimPrev,
+            moedasInicial: a.moedasInicial ?? t.caixa.moedasInicial,
+            maq1: a.bases?.maq1 != null ? { ...t.caixa.maq1, base: a.bases.maq1 } : t.caixa.maq1,
+            maq2: a.bases?.maq2 != null ? { ...t.caixa.maq2, base: a.bases.maq2 } : t.caixa.maq2,
+          },
+        };
+      };
       n = {
         ...s,
         turnoAtivo: s.turnoAtivo?.id === a.id ? ajustar(s.turnoAtivo) : s.turnoAtivo,
@@ -1270,6 +1278,27 @@ export function baseHerdadaMaq(t: Turno, which: "maq1" | "maq2"): number {
   if (which === "maq2" && !t.caixa.maq2Ativa) return 0;
   const m = t.caixa[which];
   return t.shift === "noite" ? (m.apos00 ?? 0) : (m.display ?? 0);
+}
+
+// O que o turno seguinte herdou deste e mudou depois de uma correção (para repassar com AJUSTAR_HERANCA).
+// Só compara: devolve as mudanças "de → para" de cada campo herdado.
+export function mudancasDeHeranca(t: Turno, prox: Turno, products: { id: string; name: string }[]) {
+  const dif = (a: number, b: number) => Math.abs(a - b) > 0.004;
+  const caixaPara = (t.caixa.dinheiroFinal ?? 0) - (t.caixa.dinheiroMalote ?? 0);
+  const moedasPara = t.caixa.moedasFinal ?? 0;
+  const bases = (["maq1", "maq2"] as const)
+    .map((m) => ({ m, de: prox.caixa[m].base ?? 0, para: baseHerdadaMaq(t, m) }))
+    .filter((x) => (x.m === "maq1" || prox.caixa.maq2Ativa) && dif(x.de, x.para));
+  const entradas = products
+    .filter((p) => prox.items[p.id] && t.items[p.id]?.sobra != null)
+    .map((p) => ({ id: p.id, nome: p.name, de: prox.items[p.id].entrada ?? 0, para: t.items[p.id].sobra as number }))
+    .filter((x) => dif(x.de, x.para));
+  return {
+    caixa: dif(prox.caixa.caixaFimPrev ?? 0, caixaPara) ? { de: prox.caixa.caixaFimPrev ?? 0, para: caixaPara } : null,
+    moedas: dif(prox.caixa.moedasInicial ?? 0, moedasPara) ? { de: prox.caixa.moedasInicial ?? 0, para: moedasPara } : null,
+    bases,
+    entradas,
+  };
 }
 
 // Turno logo depois deste (próximo período com turno lançado: fechado ou em andamento)
@@ -2327,9 +2356,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } else if (a.type === "EDIT_HIST") {
       histPendentesRef.current.add(a.id);
       histItensRef.current.set(a.id, "todos"); // correção do dono: vale o turno inteiro
-    } else if (a.type === "AJUSTAR_BASE_MAQ") {
-      if (antes.turnoAtivo?.id === a.id) turnoSujoRef.current = true;
-      else { histPendentesRef.current.add(a.id); histItensRef.current.set(a.id, {}); }
+    } else if (a.type === "AJUSTAR_HERANCA") {
+      const itens: ItensAlterados = Object.fromEntries(Object.keys(a.entradas ?? {}).map((pid) => [pid, ["entrada"]]));
+      if (antes.turnoAtivo?.id === a.id) {
+        turnoSujoRef.current = true;
+        for (const pid of Object.keys(itens)) marcarAlterado(pid, ["entrada"]);
+      } else {
+        histPendentesRef.current.add(a.id);
+        histItensRef.current.set(a.id, unirItensAlterados(histItensRef.current.get(a.id) ?? {}, itens));
+      }
     } else if (a.type === "DISCARD_SHIFT") {
       if (!antes.turnoAtivo) return;
       cancelarSincronizacaoTurno();

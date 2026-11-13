@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import {
   useStore, getAllProducts, esperadoTurno, arrecadadoTurno, realMaq, dinheiroNoCaixa, nomeMaquina, maqAbaixoDaBase, valorComparadoMaq,
-  turnoSeguinte, baseHerdadaMaq, turnoAnteriorDe, herdarDoAnterior,
+  turnoSeguinte, mudancasDeHeranca, turnoAnteriorDe, herdarDoAnterior,
   type Turno, type ShiftItem,
 } from "@/lib/store";
 import { BRL, formatDateBR, shiftLabel } from "@/lib/format";
@@ -89,18 +89,29 @@ function EditTurno() {
     } else {
       dispatch({ type: "EDIT_HIST", id: local.id, turno: local });
     }
-    // O turno seguinte herdou o valor final das maquininhas como "valor do turno anterior": se ele mudou,
-    // oferece corrigir lá também (senão o erro continuaria passando de turno em turno)
-    const prox = turnoSeguinte(state, local);
+    // O turno seguinte herdou deste o dinheiro que ficou no caixa, as moedas, o valor final das maquininhas e
+    // a sobra de cada produto (como entrada). Se algo mudou na correção, oferece repassar para lá também
+    // (senão o erro continuaria passando de turno em turno).
+    const prox = isAtivo ? undefined : turnoSeguinte(state, local);
     if (prox) {
-      const mudancas = (["maq1", "maq2"] as const)
-        .map((m) => ({ m, de: prox.caixa[m].base ?? 0, para: baseHerdadaMaq(local, m) }))
-        .filter((x) => (x.m === "maq1" || prox.caixa.maq2Ativa) && Math.abs(x.de - x.para) > 0.004);
-      if (mudancas.length > 0 && confirm(
-        `O turno seguinte (${formatDateBR(prox.date)} · ${shiftLabel(prox.shift)}) usou estes valores como "valor do turno anterior":\n\n` +
-        mudancas.map((x) => `• ${nomeMaquina(state.taxasMaquininha, x.m)}: ${BRL(x.de)} → ${BRL(x.para)}`).join("\n") +
-        `\n\nAtualizar lá também?`)) {
-        dispatch({ type: "AJUSTAR_BASE_MAQ", id: prox.id, bases: Object.fromEntries(mudancas.map((x) => [x.m, x.para])) });
+      const m = mudancasDeHeranca(local, prox, products);
+      const linhas = [
+        ...(m.caixa ? [`• Dinheiro do caixa anterior: ${BRL(m.caixa.de)} → ${BRL(m.caixa.para)}`] : []),
+        ...(m.moedas ? [`• Moedas inicial: ${BRL(m.moedas.de)} → ${BRL(m.moedas.para)}`] : []),
+        ...m.bases.map((x) => `• ${nomeMaquina(state.taxasMaquininha, x.m)} (valor do turno anterior): ${BRL(x.de)} → ${BRL(x.para)}`),
+        ...m.entradas.slice(0, 10).map((x) => `• Entrada de ${x.nome}: ${x.de} → ${x.para}`),
+        ...(m.entradas.length > 10 ? [`• e mais ${m.entradas.length - 10} produto(s)`] : []),
+      ];
+      if (linhas.length > 0 && confirm(
+        `O turno seguinte (${formatDateBR(prox.date)} · ${shiftLabel(prox.shift)}) herdou valores deste turno que você alterou:\n\n` +
+        linhas.join("\n") + `\n\nAtualizar lá também?`)) {
+        dispatch({
+          type: "AJUSTAR_HERANCA", id: prox.id,
+          ...(m.caixa ? { caixaFimPrev: m.caixa.para } : {}),
+          ...(m.moedas ? { moedasInicial: m.moedas.para } : {}),
+          ...(m.bases.length ? { bases: Object.fromEntries(m.bases.map((x) => [x.m, x.para])) } : {}),
+          ...(m.entradas.length ? { entradas: Object.fromEntries(m.entradas.map((x) => [x.id, x.para])) } : {}),
+        });
       }
     }
     alert("Turno atualizado!");
