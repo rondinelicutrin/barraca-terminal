@@ -54,7 +54,32 @@ export interface Turno {
   fechadoPor?: string; // username de quem fechou (pode ser diferente de quem abriu)
   editado?: boolean;
   precosSnapshot: Record<string, number>;
+  // Dinheiro tirado do caixa durante o turno para pagar despesas (ex.: limpeza da praça). Fica numa tabela
+  // própria (turno_saidas, uma linha por saída) e é anexado ao turno ao carregar. Soma no Arrecadado:
+  // o dinheiro saiu do caixa, mas não é falta.
+  saidas?: SaidaCaixa[];
 }
+
+// Uma saída de dinheiro do caixa lançada no turno (nome e valor copiados da lista na hora do lançamento)
+export interface SaidaCaixa {
+  id: string;
+  turnoId: string;
+  despesaId?: string;
+  nome: string;
+  valor: number;
+  por: string;      // username de quem lançou
+  criadoEm: number;
+}
+
+// Despesa da lista "Saídas do caixa" (Produtos): só o dono e os administradores criam e mudam o valor
+export interface DespesaCaixa {
+  id: string;
+  nome: string;
+  valor: number;
+  ordem: number;
+}
+
+export const totalSaidas = (t: Pick<Turno, "saidas">) => (t.saidas ?? []).reduce((s, x) => s + (x.valor || 0), 0);
 
 export interface Funcionario {
   id: string;
@@ -204,6 +229,7 @@ export interface State {
   taxasMaquininha: TaxasMaquininha; // percentual cobrado por cada maquininha
   ajustesFolha: Record<string, AjusteFolha>; // "username|segunda-feira da semana" -> ajuste da semana
   itensSemana: Record<string, ItemSemana>;   // pagamentos extras e preços de fornecedor, por id
+  despesasCaixa: DespesaCaixa[];             // lista de saídas do caixa (limpeza da praça...) com o valor
   // true depois que o login e os dados guardados no navegador foram lidos. Até lá as telas não
   // redirecionam ninguém — antes, recarregar a página (F5) jogava o usuário para o login/Painel.
   hidratado?: boolean;
@@ -232,6 +258,7 @@ const initialState = (): State => {
     taxasMaquininha: { maq1: 0, maq2: 0 },
     ajustesFolha: {},
     itensSemana: {},
+    despesasCaixa: [],
   };
 };
 
@@ -291,6 +318,12 @@ type Action =
   | { type: "SET_ITEM_SEMANA"; item: ItemSemana }
   | { type: "REMOVE_ITEM_SEMANA"; id: string }
   | { type: "SET_ITENS_SEMANA_FROM_DB"; itens: ItemSemana[]; manterIds: string[] }
+  // Saídas de dinheiro do caixa no turno (aberto ou fechado) e a lista de despesas
+  | { type: "ADD_SAIDA"; saida: SaidaCaixa }
+  | { type: "REMOVE_SAIDA"; turnoId: string; id: string }
+  | { type: "SET_DESPESAS_FROM_DB"; despesas: DespesaCaixa[] }
+  | { type: "SALVAR_DESPESA"; d: DespesaCaixa }
+  | { type: "REMOVE_DESPESA"; id: string }
   | { type: "ADD_PRODUCT"; b: Product }
   | { type: "REMOVE_PRODUCT"; productId: string };
 
@@ -666,6 +699,7 @@ function reducer(s: State, a: Action): State {
       if (!migrated.taxasMaquininha) migrated.taxasMaquininha = { maq1: 0, maq2: 0 };
       if (!migrated.ajustesFolha) migrated.ajustesFolha = {};
       if (!migrated.itensSemana) migrated.itensSemana = {};
+      if (!migrated.despesasCaixa) migrated.despesasCaixa = [];
       if (migrated.turnoAtivo) {
         const c = migrated.turnoAtivo.caixa as any;
         if (c.dinheiro !== undefined && c.dinheiroFinal === undefined) {
@@ -821,7 +855,8 @@ function reducer(s: State, a: Action): State {
       break;
     }
     case "EDIT_HIST": {
-      const historico = s.historico.map((t) => (t.id === a.id ? { ...a.turno, editado: true } : t));
+      // As saídas do caixa têm lançamento próprio (ADD/REMOVE_SAIDA): a correção não as sobrescreve
+      const historico = s.historico.map((t) => (t.id === a.id ? { ...a.turno, saidas: t.saidas, editado: true } : t));
       n = {
         ...s,
         historico,
@@ -836,7 +871,7 @@ function reducer(s: State, a: Action): State {
       if (!s.turnoAtivo || s.turnoAtivo.id !== a.turno.id) return s;
       n = {
         ...s,
-        turnoAtivo: { ...a.turno, editado: true },
+        turnoAtivo: { ...a.turno, saidas: s.turnoAtivo.saidas, editado: true },
         // Correção do turno em andamento também já atualiza a quantidade em estoque atual
         estoqueQtd: syncEstoqueFromTurno(s.estoqueQtd, a.turno),
       };
@@ -1001,6 +1036,25 @@ function reducer(s: State, a: Action): State {
       const { [a.id]: _removido, ...resto } = s.itensSemana;
       n = { ...s, itensSemana: resto }; break;
     }
+    case "ADD_SAIDA":
+    case "REMOVE_SAIDA": {
+      const tid = a.type === "ADD_SAIDA" ? a.saida.turnoId : a.turnoId;
+      const mudar = (t: Turno): Turno => t.id !== tid ? t : {
+        ...t,
+        saidas: a.type === "ADD_SAIDA"
+          ? [...(t.saidas ?? []).filter((x) => x.id !== a.saida.id), a.saida]
+          : (t.saidas ?? []).filter((x) => x.id !== a.id),
+      };
+      n = { ...s, turnoAtivo: s.turnoAtivo ? mudar(s.turnoAtivo) : null, historico: s.historico.map(mudar) };
+      break;
+    }
+    case "SET_DESPESAS_FROM_DB":
+      n = { ...s, despesasCaixa: a.despesas }; break;
+    case "SALVAR_DESPESA":
+      n = { ...s, despesasCaixa: [...s.despesasCaixa.filter((d) => d.id !== a.d.id), a.d].sort((x, y) => x.ordem - y.ordem || x.nome.localeCompare(y.nome)) };
+      break;
+    case "REMOVE_DESPESA":
+      n = { ...s, despesasCaixa: s.despesasCaixa.filter((d) => d.id !== a.id) }; break;
     case "SET_ITENS_SEMANA_FROM_DB": {
       // O banco manda; ficam também os que ainda estão esperando para ser enviados deste aparelho
       const doBanco = Object.fromEntries(a.itens.map((i) => [i.id, i]));
@@ -1379,7 +1433,8 @@ export function arrecadadoTurno(t: Turno): number {
   // dinheiro = dinheiro final − dinheiro do caixa anterior (o que entrou de dinheiro no turno)
   // moedas = moedas final − moedas inicial (variação)
   // Podem ser negativos (ex.: moedas usadas de troco): antes eram travados em zero e a falta sumia.
-  const dinheiro = (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0);
+  // + saídas do caixa: o dinheiro pago (ex.: limpeza da praça) foi vendido e saiu do caixa — não é falta
+  const dinheiro = (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0) + totalSaidas(t);
   const moedas   = (c.moedasFinal || 0) - (c.moedasInicial || 0);
   return dinheiro + moedas + (c.pix || 0) + (c.voucher || 0) + maq1 + maq2;
 }
@@ -1391,15 +1446,17 @@ export interface ResumoPagamentos {
   voucher: number;
   maq1Bruto: number;
   maq2Bruto: number;
+  saidas: number; // dinheiro tirado do caixa nos turnos (despesas): já está somado em "dinheiro"
 }
 
 // Soma, por tipo de pagamento, tudo o que foi arrecadado nos turnos fechados dentro do período.
 export function resumoPagamentos(historico: Turno[], from: string, to: string): ResumoPagamentos {
-  const r: ResumoPagamentos = { dinheiro: 0, moedas: 0, pix: 0, voucher: 0, maq1Bruto: 0, maq2Bruto: 0 };
+  const r: ResumoPagamentos = { dinheiro: 0, moedas: 0, pix: 0, voucher: 0, maq1Bruto: 0, maq2Bruto: 0, saidas: 0 };
   for (const t of historico) {
     if (t.date < from || t.date > to) continue;
     const c = t.caixa;
-    r.dinheiro += (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0);
+    r.dinheiro += (c.dinheiroFinal || 0) - (c.caixaFimPrev || 0) + totalSaidas(t);
+    r.saidas   += totalSaidas(t);
     r.moedas   += (c.moedasFinal || 0) - (c.moedasInicial || 0);
     r.pix      += c.pix || 0;
     r.voucher  += c.voucher || 0;
@@ -1960,7 +2017,94 @@ async function buscarHistorico(desde?: string): Promise<Turno[]> {
   const allItemRows = await buscarEmLotes("turno_itens", "turno_id", histRows.map((r: any) => r.id));
   const itemsByTurno: Record<string, Record<string, ShiftItem>> = {};
   for (const ir of allItemRows ?? []) (itemsByTurno[ir.turno_id] ??= {})[ir.product_id] = shiftItemFromRow(ir);
-  return histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {}));
+  return anexarSaidas(histRows.map((row: any) => turnoFromRow(row, itemsByTurno[row.id] ?? {})));
+}
+
+// ---- Saídas do caixa (turno_saidas) e lista de despesas (despesas_caixa) ----
+let avisouSqlSaidas = false;
+const avisarSqlSaidas = () => {
+  if (avisouSqlSaidas) return;
+  avisouSqlSaidas = true;
+  alert("Para salvar as saídas do caixa no banco, rode o arquivo saidas_caixa.sql no SQL Editor do Supabase (até lá elas valem só neste aparelho).");
+};
+const saidaFromRow = (r: any): SaidaCaixa => ({
+  id: r.id, turnoId: r.turno_id, despesaId: r.despesa_id ?? undefined, nome: r.nome, valor: Number(r.valor) || 0,
+  por: r.lancado_por ?? "", criadoEm: new Date(r.created_at).getTime(),
+});
+const saidaToRow = (x: SaidaCaixa) => ({
+  id: x.id, turno_id: x.turnoId, despesa_id: x.despesaId ?? null, nome: x.nome, valor: x.valor,
+  lancado_por: x.por, created_at: new Date(x.criadoEm).toISOString(),
+});
+
+// Busca as saídas dos turnos no banco e anexa a cada um (com as lançadas aqui que ainda esperam a internet).
+// Banco sem a tabela (SQL ainda não rodado) ou sem internet: mantém as saídas que o turno já tinha.
+async function anexarSaidas<T extends Turno | null>(turnos: T[]): Promise<T[]> {
+  const ids = turnos.filter(Boolean).map((t) => (t as Turno).id);
+  if (ids.length === 0) return turnos;
+  const porTurno: Record<string, SaidaCaixa[]> = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const { data, error } = await supabase.from("turno_saidas").select("*").in("turno_id", ids.slice(i, i + 50));
+    if (error) {
+      // eslint-disable-next-line no-console
+      if (!tabelaFaltando(error)) console.error("Não foi possível carregar as saídas do caixa:", error);
+      return turnos;
+    }
+    for (const r of data ?? []) (porTurno[r.turno_id] ??= []).push(saidaFromRow(r));
+  }
+  for (const p of pendentesDoTipo<Action>("saida")) {
+    if (p.type === "ADD_SAIDA") {
+      const l = (porTurno[p.saida.turnoId] ??= []);
+      if (!l.some((x) => x.id === p.saida.id)) l.push(p.saida);
+    } else if (p.type === "REMOVE_SAIDA" && porTurno[p.turnoId]) {
+      porTurno[p.turnoId] = porTurno[p.turnoId].filter((x) => x.id !== p.id);
+    }
+  }
+  return turnos.map((t) => (t ? { ...t, saidas: (porTurno[t.id] ?? []).sort((a, b) => a.criadoEm - b.criadoEm) } : t));
+}
+
+async function sincronizarSaida(a: Action) {
+  try {
+    if (a.type === "ADD_SAIDA") {
+      const { error } = await supabase.from("turno_saidas").upsert(saidaToRow(a.saida), { onConflict: "id" });
+      if (error) throw error;
+    } else if (a.type === "REMOVE_SAIDA") {
+      const { error } = await supabase.from("turno_saidas").delete().eq("id", a.id);
+      if (error) throw error;
+    }
+  } catch (e) {
+    if (tabelaFaltando(e)) { avisarSqlSaidas(); return; }
+    throw e;
+  }
+}
+
+async function sincronizarDespesa(a: Action) {
+  try {
+    if (a.type === "SALVAR_DESPESA") {
+      const { error } = await supabase.from("despesas_caixa")
+        .upsert({ id: a.d.id, nome: a.d.nome, valor: a.d.valor, ordem: a.d.ordem }, { onConflict: "id" });
+      if (error) throw error;
+    } else if (a.type === "REMOVE_DESPESA") {
+      const { error } = await supabase.from("despesas_caixa").delete().eq("id", a.id);
+      if (error) throw error;
+    }
+  } catch (e) {
+    if (tabelaFaltando(e)) { avisarSqlSaidas(); return; }
+    throw e;
+  }
+}
+
+async function carregarDespesas(dispatch: React.Dispatch<Action>) {
+  if (pendentesDoTipo("despesa").length > 0) return; // não desfaz o que foi mudado aqui e ainda não foi
+  const { data, error } = await supabase.from("despesas_caixa").select("*");
+  if (error) {
+    // eslint-disable-next-line no-console
+    if (!tabelaFaltando(error)) console.error("Não foi possível carregar a lista de saídas do caixa:", error);
+    return;
+  }
+  const despesas: DespesaCaixa[] = (data ?? [])
+    .map((r: any) => ({ id: r.id, nome: r.nome, valor: Number(r.valor) || 0, ordem: Number(r.ordem) || 0 }))
+    .sort((x, y) => x.ordem - y.ordem || x.nome.localeCompare(y.nome));
+  dispatch({ type: "SET_DESPESAS_FROM_DB", despesas });
 }
 
 // Fechamentos dos últimos dias direto do banco (para abrir o turno com a sobra certa do anterior).
@@ -1988,7 +2132,7 @@ export async function buscarTurnoAberto(): Promise<Turno | null | undefined> {
   if (errItens) return undefined;
   const items: Record<string, ShiftItem> = {};
   for (const ir of itemRows ?? []) items[ir.product_id] = shiftItemFromRow(ir);
-  return turnoFromRow(row, items);
+  return (await anexarSaidas([turnoFromRow(row, items)]))[0];
 }
 
 // ---- Fila de envio: o que cada tipo de lançamento faz no Supabase (ver lib/fila.ts) ----
@@ -2030,6 +2174,8 @@ registrarExecutor("config", gravarConfig);
 registrarExecutor("ajusteFolha", gravarAjusteFolha);
 registrarExecutor("itemSemana", gravarItemSemana);
 registrarExecutor("itemSemanaRemover", removerItemSemana);
+registrarExecutor("saida", (a: Action) => sincronizarSaida(a));
+registrarExecutor("despesa", (a: Action) => sincronizarDespesa(a));
 
 const raw0 = (salvo: Partial<State>): State | null =>
   Object.keys(salvo).length > 0 ? { ...initialState(), ...salvo } : null;
@@ -2100,7 +2246,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (errItens) throw errItens;
           const items: Record<string, ShiftItem> = {};
           for (const ir of itemRows ?? []) items[ir.product_id] = shiftItemFromRow(ir);
-          turnoAtivo = turnoFromRow(row, items);
+          turnoAtivo = (await anexarSaidas([turnoFromRow(row, items)]))[0];
         }
 
         let historico = await buscarHistorico();
@@ -2157,6 +2303,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // 7) Adicional/desconto de cada semana (fechamento semanal da folha)
     void filaEnviada.then(() => carregarAjustesFolha(dispatch));
     void filaEnviada.then(() => carregarItensSemana(dispatch, pendentesDoTipo<any>("itemSemana").map((r) => r.id)));
+    void filaEnviada.then(() => carregarDespesas(dispatch));
 
     // 6) Produtos: preços, produtos cadastrados pelo dono, removidos e estoque
     (async () => {
@@ -2259,6 +2406,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     if (pendentesDoTipo("ajusteFolha").length === 0) await carregarAjustesFolha(dispatch);
     if (pendentesDoTipo("itemSemana").length === 0 && pendentesDoTipo("itemSemanaRemover").length === 0) await carregarItensSemana(dispatch);
+    await carregarDespesas(dispatch);
   };
 
   // Recarrega os produtos (preço, estoque) ao voltar para o app — o dono pode ter mudado algo em outro aparelho
@@ -2385,6 +2533,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       enviar("ponto", a, a.type === "UPDATE_PONTO_CONSUMO" ? { chave: `pc:${a.pontoId}|${a.productId}` } : {});
     } else if (a.type === "ADD_RETIRADA" || a.type === "REMOVE_RETIRADA") {
       enviar("retirada", a);
+    } else if (a.type === "ADD_SAIDA" || a.type === "REMOVE_SAIDA") {
+      enviar("saida", a);
+    } else if (a.type === "SALVAR_DESPESA" || a.type === "REMOVE_DESPESA") {
+      enviar("despesa", a, { chave: `despesa:${a.type === "SALVAR_DESPESA" ? a.d.id : a.id}` });
     } else if (a.type === "ADD_PRODUCT") {
       // Produto novo vai para o banco junto com o preço (o estado ainda não tem o produto: monta na hora)
       const s = { ...antes, bebidas: [...antes.bebidas, a.b], precos: { ...antes.precos, [a.b.id]: a.b.price } };
