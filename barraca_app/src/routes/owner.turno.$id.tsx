@@ -13,6 +13,7 @@ import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
 import { ConsumoTurnoEditor } from "@/components/ConsumoTurnoEditor";
 import { EntradasDoTurno, RelatorioSobrasBotoes } from "@/components/FechamentoTurno";
+import { SaidasCaixa } from "@/components/SaidasCaixa";
 import { entradasDoTurno } from "@/lib/relatorio-sobras";
 
 export const Route = createFileRoute("/owner/turno/$id")({
@@ -38,7 +39,8 @@ function EditTurno() {
   const products = getAllProducts(state);
   // useLivePrice=true: ao corrigir um turno, usamos os preços atuais (já corrigidos pelo dono)
   const esperado = useMemo(() => (local ? esperadoTurno(local, products, true) : 0), [local, products]);
-  const arrec = useMemo(() => (local ? arrecadadoTurno(local) : 0), [local]);
+  // As saídas do caixa são lançadas na hora (não esperam "Salvar"): vêm do turno atual, não do formulário
+  const arrec = useMemo(() => (local ? arrecadadoTurno({ ...local, saidas: orig?.saidas }) : 0), [local, orig?.saidas]);
 
   if (!orig || !local) {
     return (
@@ -255,6 +257,8 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
   const { state } = useStore();
   const c = local.caixa;
   const isNoite = local.shift === "noite";
+  // Saídas do caixa: lançadas na hora no turno guardado (aberto ou fechado), sem esperar "Salvar"
+  const atual = state.turnoAtivo?.id === local.id ? state.turnoAtivo : state.historico.find((h) => h.id === local.id);
   const dinheiroRestante = dinheiroNoCaixa(c);
   const variacaoMoedas = (c.moedasFinal || 0) - (c.moedasInicial || 0);
 
@@ -284,6 +288,8 @@ function CaixaEdit({ local, updCaixa, updMaq }: {
           Caixa anterior (ref.): <span className="mono">{BRL(c.caixaFimPrev)}</span>
         </div>
       </div>
+
+      {atual && <SaidasCaixa turno={atual} />}
 
       <div className="bg-card border border-border rounded-xl p-3 space-y-3">
         <div className="text-sm font-medium">🪙 Moedas</div>

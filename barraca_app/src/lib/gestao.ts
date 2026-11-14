@@ -114,7 +114,8 @@ export function liquidoDoPeriodo(state: State, from: string, to: string) {
   const taxas = state.taxasMaquininha;
   const taxaMaq1 = r.maq1Bruto * (taxas.maq1 / 100);
   const taxaMaq2 = r.maq2Bruto * (taxas.maq2 / 100);
-  const dinheiroLiq = Math.max(0, r.dinheiro + inclusoes - retiradas);
+  // Saídas do caixa nos turnos (despesas como a limpeza da praça): estão no bruto e saem do líquido
+  const dinheiroLiq = Math.max(0, r.dinheiro + inclusoes - retiradas - r.saidas);
   const liquido =
     dinheiroLiq + r.moedas + r.pix + r.voucher +
     (r.maq1Bruto - taxaMaq1 - pagoMaq1) + (r.maq2Bruto - taxaMaq2 - pagoMaq2);

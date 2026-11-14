@@ -15,6 +15,7 @@ import { DatePickerBR } from "@/components/ui/date-picker-br";
 import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
 import { montarRelatorioSobras } from "@/lib/relatorio-sobras";
 import { RelatorioSobrasBotoes, camposObrigatoriosDoTurno, situacaoPonto } from "@/components/FechamentoTurno";
+import { SaidasCaixa } from "@/components/SaidasCaixa";
 import type { Category } from "@/lib/products";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 
@@ -636,6 +637,9 @@ function CaixaView({ camposObrigatorios }: { camposObrigatorios: { key: string; 
           </div>
         )}
       </div>
+
+      {/* ── Saídas do caixa (despesas pagas com o dinheiro do caixa) ── */}
+      <SaidasCaixa turno={t} />
 
       {/* ── Moedas ── */}
       <div className="bg-card border border-border rounded-xl p-3 space-y-3">

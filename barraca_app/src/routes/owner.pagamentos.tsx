@@ -13,6 +13,8 @@ import { Trash2 } from "lucide-react";
 import { useFiltro } from "@/lib/filtros";
 import { PeriodoComSemana } from "@/components/PeriodoComSemana";
 
+const PERIODO: Record<string, string> = { manha: "Manhã", tarde: "Tarde", noite: "Noite" };
+
 export const Route = createFileRoute("/owner/pagamentos")({
   component: PagamentosPage,
   head: () => ({ meta: [{ title: "Pagamentos — Barraca Terminal" }, { name: "description", content: "Vendas por tipo de pagamento, retiradas e inclusões de dinheiro no caixa e taxa das maquininhas." }] }),
@@ -46,7 +48,12 @@ function PagamentosPage() {
   const { retirado: totalRetirado, incluido: totalIncluido } = movimentosDinheiro(movDinheiro);
   const totalPagoMaq1 = pagamentosMaq1.reduce((s, r) => s + r.valor, 0);
   const totalPagoMaq2 = pagamentosMaq2.reduce((s, r) => s + r.valor, 0);
-  const dinheiroLiquido = Math.max(0, resumo.dinheiro + totalIncluido - totalRetirado);
+  // Saídas do caixa lançadas nos turnos (ex.: limpeza da praça): estão no bruto (foram vendas) e saem do líquido
+  const saidasTurnos = useMemo(() => state.historico
+    .filter((t) => t.date >= from && t.date <= to)
+    .flatMap((t) => (t.saidas ?? []).map((x) => ({ ...x, date: t.date, shift: t.shift })))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.criadoEm - a.criadoEm), [state.historico, from, to]);
+  const dinheiroLiquido = Math.max(0, resumo.dinheiro + totalIncluido - totalRetirado - resumo.saidas);
 
   const taxas = state.taxasMaquininha;
   // Líquido da maquininha = bruto − taxa − pagamentos lançados contra o saldo dela
@@ -100,7 +107,7 @@ function PagamentosPage() {
           heading: "Resumo por tipo de pagamento",
           columns: ["Tipo", "Bruto", "Líquido"],
           rows: [
-            ["Dinheiro", `R$${resumo.dinheiro.toFixed(2)}`, `R$${dinheiroLiquido.toFixed(2)} (inclusões R$${totalIncluido.toFixed(2)}, retiradas R$${totalRetirado.toFixed(2)})`],
+            ["Dinheiro", `R$${resumo.dinheiro.toFixed(2)}`, `R$${dinheiroLiquido.toFixed(2)} (inclusões R$${totalIncluido.toFixed(2)}, retiradas R$${totalRetirado.toFixed(2)}, saídas nos turnos R$${resumo.saidas.toFixed(2)})`],
             ["Moedas", `R$${resumo.moedas.toFixed(2)}`, `R$${resumo.moedas.toFixed(2)}`],
             ["Pix", `R$${resumo.pix.toFixed(2)}`, `R$${resumo.pix.toFixed(2)}`],
             ["Voucher", `R$${resumo.voucher.toFixed(2)}`, `R$${resumo.voucher.toFixed(2)}`],
@@ -118,6 +125,11 @@ function PagamentosPage() {
           heading: `Retiradas de dinheiro (total: R$${totalRetirado.toFixed(2)})`,
           columns: ["Data", "Valor", "Motivo"],
           rows: retiradasPeriodo.map((r) => [formatDateBR(r.date), `R$${r.valor.toFixed(2)}`, r.motivo]),
+        },
+        {
+          heading: `Saídas do caixa nos turnos (total: R$${resumo.saidas.toFixed(2)})`,
+          columns: ["Data", "Turno", "Valor", "Despesa"],
+          rows: saidasTurnos.map((x) => [formatDateBR(x.date), PERIODO[x.shift], `R$${x.valor.toFixed(2)}`, x.nome]),
         },
         {
           heading: `Pagamentos pelas maquininhas (total: R$${(totalPagoMaq1 + totalPagoMaq2).toFixed(2)})`,
@@ -149,6 +161,10 @@ function PagamentosPage() {
     linhas.push([`RETIRADAS DE DINHEIRO (total: R$${totalRetirado.toFixed(2)})`]);
     linhas.push(["Data", "Valor (R$)", "Motivo"]);
     for (const r of retiradasPeriodo) linhas.push([formatDateBR(r.date), r.valor.toFixed(2), r.motivo]);
+    linhas.push([]);
+    linhas.push([`SAÍDAS DO CAIXA NOS TURNOS (total: R$${resumo.saidas.toFixed(2)})`]);
+    linhas.push(["Data", "Turno", "Valor (R$)", "Despesa"]);
+    for (const x of saidasTurnos) linhas.push([formatDateBR(x.date), PERIODO[x.shift], x.valor.toFixed(2), x.nome]);
     linhas.push([]);
     linhas.push([`PAGAMENTOS PELAS MAQUININHAS (total: R$${(totalPagoMaq1 + totalPagoMaq2).toFixed(2)})`]);
     linhas.push(["Data", "Cartão/Banco", "Valor (R$)", "Motivo"]);
@@ -190,6 +206,18 @@ function PagamentosPage() {
             <div className="flex justify-between"><span>Bruto (vendido em dinheiro)</span><span className="mono">{BRL(resumo.dinheiro)}</span></div>
             <div className="flex justify-between"><span>Total incluído no período</span><span className="mono text-success">+{BRL(totalIncluido)}</span></div>
             <div className="flex justify-between"><span>Total retirado no período</span><span className="mono text-warning">-{BRL(totalRetirado)}</span></div>
+            {resumo.saidas > 0 && (
+              <details>
+                <summary className="flex justify-between cursor-pointer list-none">
+                  <span>Saídas do caixa nos turnos (despesas) ▾</span><span className="mono text-warning">-{BRL(resumo.saidas)}</span>
+                </summary>
+                <div className="pl-2 pt-1 space-y-0.5">
+                  {saidasTurnos.map((x) => (
+                    <div key={x.id} className="flex justify-between"><span>{formatDateBR(x.date)} · {PERIODO[x.shift]} · {x.nome}</span><span className="mono">{BRL(x.valor)}</span></div>
+                  ))}
+                </div>
+              </details>
+            )}
             <div className="flex justify-between text-sm font-semibold text-foreground border-t border-border pt-1">
               <span>Dinheiro líquido (com inclusões e retiradas)</span><span className="mono text-primary">{BRL(dinheiroLiquido)}</span>
             </div>
