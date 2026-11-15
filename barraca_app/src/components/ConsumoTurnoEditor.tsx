@@ -46,11 +46,14 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
 }) {
   const { state, dispatch } = useStore();
   const products = getAllProducts(state);
-  const [extras, setExtras] = useState<string[]>([]);
   const [novo, setNovo] = useState<Record<string, { pid: string; qtd: number }>>({});
   const nome = (u: string) => state.funcionarios.find((f) => f.username === u)?.nome ?? u;
   const nomeProd = (pid: string) => products.find((p) => p.id === pid)?.name ?? pid;
-  const pessoas = [...new Set([local.employee, ...(local.outrosFuncionarios ?? []), ...extras])];
+  // Quem trabalhou no turno e quem só passou para consumir (lista guardada no turno, lida do estado atual)
+  const atual = state.turnoAtivo?.id === local.id ? state.turnoAtivo : state.historico.find((h) => h.id === local.id);
+  const soConsumo = atual?.consumidores ?? local.consumidores ?? [];
+  const pessoas = [...new Set([local.employee, ...(local.outrosFuncionarios ?? []), ...soConsumo])];
+  const trabalhou = new Set([local.employee, ...(local.outrosFuncionarios ?? [])]);
   const disponiveis = state.funcionarios.filter((f) => !f.excluido && f.ativo !== false && !pessoas.includes(f.username));
   const pontosDe = (u: string) => state.pontos.filter((p) => p.employeeUsername === u && p.date === local.date);
   const qtd = (u: string, pid: string) =>
@@ -143,7 +146,7 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
         return (
           <div key={u} className="bg-background border border-border/60 rounded-lg p-2 space-y-1.5">
             <div className="flex justify-between text-xs font-semibold">
-              <span>{nome(u)}{naPonto && u === eu ? " (você)" : ""}</span>
+              <span>{nome(u)}{naPonto && u === eu ? " (você)" : ""}{!trabalhou.has(u) && <span className="font-normal text-muted-foreground"> · só consumo</span>}</span>
               <span className="mono">{BRL(valorConsumoPonto(state, u, itens))}</span>
             </div>
             {itens.length === 0 && (
@@ -187,9 +190,10 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
         );
       })}
       {!somenteLeitura && disponiveis.length > 0 && (
-        <select value="" aria-label="Incluir outra pessoa no consumo do turno" onChange={(e) => e.target.value && setExtras([...extras, e.target.value])}
+        <select value="" aria-label="Incluir outra pessoa no consumo do turno"
+          onChange={(e) => e.target.value && dispatch({ type: "ADD_CONSUMIDOR_TURNO", turnoId: local.id, username: e.target.value })}
           className="w-full h-9 rounded-md bg-input border border-border px-2 text-xs">
-          <option value="">+ incluir outra pessoa…</option>
+          <option value="">+ incluir quem só passou para consumir…</option>
           {disponiveis.map((f) => <option key={f.username} value={f.username}>{f.nome}</option>)}
         </select>
       )}

@@ -53,7 +53,8 @@ const GRUPOS: { titulo: string; filtro: (p: Product) => boolean; totalPasteis?: 
 export function consumoPorPessoaDoTurno(turno: Turno, state: State): ConsumoPessoa[] {
   const products = getAllProducts(state);
   const nomeProduto = (id: string) => products.find((p) => p.id === id)?.name ?? id;
-  return [turno.employee, ...(turno.outrosFuncionarios ?? [])].map((username) => {
+  // Quem trabalhou no turno e quem só passou para consumir (ex.: o dono): todos aparecem no fechamento
+  return [...new Set([turno.employee, ...(turno.outrosFuncionarios ?? []), ...(turno.consumidores ?? [])])].map((username) => {
     const itens = state.pontos.filter((p) => p.employeeUsername === username && p.date === turno.date).flatMap((p) => p.consumo);
     const qtd: Record<string, number> = {};
     for (const c of itens) qtd[c.productId] = (qtd[c.productId] ?? 0) + c.qty;
