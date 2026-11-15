@@ -193,7 +193,7 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
         <select value="" aria-label="Incluir outra pessoa no consumo do turno"
           onChange={(e) => e.target.value && dispatch({ type: "ADD_CONSUMIDOR_TURNO", turnoId: local.id, username: e.target.value })}
           className="w-full h-9 rounded-md bg-input border border-border px-2 text-xs">
-          <option value="">+ incluir quem só passou para consumir…</option>
+          <option value="">+ incluir consumo dos colegas…</option>
           {disponiveis.map((f) => <option key={f.username} value={f.username}>{f.nome}</option>)}
         </select>
       )}
