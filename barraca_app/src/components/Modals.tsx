@@ -5,7 +5,7 @@ import { useStore, getAllProducts, descontoPercentual, valorConsumoPonto, limite
 import { BRL, parseInt2, parseBR } from "@/lib/format";
 
 // Limite máximo para um produto: entrada + chegada - descarte - consumoEst
-function limiteDisponivel(it: ShiftItem | undefined, tipo: "consumo" | "descarte"): number {
+export function limiteDisponivel(it: ShiftItem | undefined, tipo: "consumo" | "descarte"): number {
   if (!it) return 999;
   const base = (it.entrada || 0) + (it.chegada || 0);
   if (tipo === "consumo") {
