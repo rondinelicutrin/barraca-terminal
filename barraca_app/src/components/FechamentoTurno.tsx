@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useStore, veResultadoCaixa, turnoFechadoNoBanco, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
+import { ConsumoTurnoEditor, DescarteTurnoEditor } from "@/components/ConsumoTurnoEditor";
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
@@ -193,7 +194,7 @@ function Row({ label, value, valueClass }: { label: string; value: string; value
 
 // Fechamento do turno (Esperado / Arrecadado / Diferença + botão Fechar) — fica no menu Ponto,
 // junto com o registro de entrada, saída e consumo.
-export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: Turno) => void; pendencias?: string[] }) {
+export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) {
   const { state, dispatch } = useStore();
   const t = state.turnoAtivo;
   const products = getAllProducts(state);
@@ -209,14 +210,9 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
     .map((p) => ({ p, q: t.items[p.id]?.[campo] || 0 }))
     .filter(({ q }) => q > 0)
     .map(({ p, q }) => `${p.decimal ? String(q).replace(".", ",") : q}x ${p.name}`);
-  const consumoLancado = lancados("consumo"), consumoBarraca = lancados("consumoEst"), descarteLancado = lancados("descarte");
+  const consumoBarraca = lancados("consumoEst");
 
   const closeShift = () => {
-    if (pendencias.length > 0) {
-      alert(`Há consumo adicionado e ainda NÃO registrado de: ${pendencias.join(", ")}.\n\nToque em "Registrar" (acima) para gravar antes de fechar o turno.`);
-      document.getElementById("lancar-consumo-descarte")?.scrollIntoView({ behavior: "smooth", block: "center" });
-      return;
-    }
     if (semPonto.length > 0) {
       alert(
         `ATENÇÃO: NÃO É POSSÍVEL FECHAR O TURNO SEM BATER O PONTO.\n\n` +
@@ -266,12 +262,6 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
     setPerguntando(false);
     dispatch({ type: "CLOSE_SHIFT" });
     onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
-  };
-
-  const vouLancar = () => {
-    setPerguntando(false);
-    // Leva até os botões de consumo e descarte (menu Ponto)
-    setTimeout(() => document.getElementById("lancar-consumo-descarte")?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
   };
 
   const listaLancados = (rotulo: string, itens: string[], vazio: string) => (
@@ -333,17 +323,18 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
 
       <Button className="w-full" onClick={closeShift}>Fechar turno</Button>
       <Dialog open={perguntando} onOpenChange={setPerguntando}>
-        <DialogContent className="max-w-[420px]">
+        <DialogContent className="max-w-[440px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Antes de fechar o turno</DialogTitle></DialogHeader>
           <div className="space-y-3 text-sm">
-            <div className="bg-background border border-border rounded-lg p-2.5 space-y-1 text-xs">
-              <div className="text-[11px] text-muted-foreground uppercase tracking-wide">Já lançado neste turno</div>
-              {consumoPorPessoaDoTurno(t, state).map((c) => <div key={c.nome}>{listaLancados(`Consumo de ${c.nome}`, c.itens ? [c.itens] : [], "nenhum lançado")}</div>)}
-              {consumoLancado.length > 0 && <div className="text-[11px] text-muted-foreground">Total no estoque do turno: {consumoLancado.join(", ")}</div>}
-              {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
-              {listaLancados("Descarte", descarteLancado, "nenhum lançado")}
-              {(t.saidas ?? []).length > 0 && listaLancados("Saídas do caixa", (t.saidas ?? []).map((x) => `${x.nome} ${BRL(x.valor)}`), "")}
-            </div>
+            {/* Conferência final: os mesmos blocos do Ponto, para incluir aqui mesmo o que faltou */}
+            <ConsumoTurnoEditor local={t} setLocal={() => {}} isAtivo modo="ponto" />
+            <DescarteTurnoEditor turno={t} />
+            {(consumoBarraca.length > 0 || (t.saidas ?? []).length > 0) && (
+              <div className="bg-background border border-border rounded-lg p-2.5 space-y-1 text-xs">
+                {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
+                {(t.saidas ?? []).length > 0 && listaLancados("Saídas do caixa", (t.saidas ?? []).map((x) => `${x.nome} ${BRL(x.valor)}`), "")}
+              </div>
+            )}
             <p className="font-semibold">
               Todo o CONSUMO (de cada funcionário e da barraca) e todos os DESCARTES (pastel que caiu, queimou ou estragou) deste turno já foram lançados?
             </p>
@@ -351,7 +342,7 @@ export function FechamentoTurno({ onClosed, pendencias = [] }: { onClosed: (t: T
               O que não for lançado muda o resultado do fechamento. Lembre também: pare as vendas e conte sobras, maquininhas e dinheiro no mesmo momento.
             </p>
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={vouLancar}>Lançar consumo/descarte</Button>
+              <Button variant="secondary" onClick={() => setPerguntando(false)}>Voltar</Button>
               <Button onClick={confirmarFechamento}>Sim, fechar turno</Button>
             </div>
           </div>
