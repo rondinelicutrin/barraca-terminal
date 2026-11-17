@@ -354,9 +354,9 @@ function GestaoPage() {
                         const dif = l.recebido != null ? l.recebido - l.lancado : 0;
                         const quem = state.funcionarios.find((f) => f.username === (l.turno.fechadoPor ?? l.turno.employee))?.nome ?? l.turno.employee;
                         return (
-                          <div key={l.turno.id} className={`flex items-center justify-between gap-2 ${Math.abs(dif) > 0.004 ? "text-destructive font-semibold" : ""}`}>
-                            <span className="min-w-0 truncate">{rotuloTurno(l.turno)} · {quem}</span>
-                            <span className="flex items-center gap-1.5 shrink-0">
+                          <div key={l.turno.id} className={`flex flex-wrap items-center justify-between gap-x-2 gap-y-1 ${Math.abs(dif) > 0.004 ? "text-destructive font-semibold" : ""}`}>
+                            <span className="min-w-0">{rotuloTurno(l.turno)} · {quem}</span>
+                            <span className="flex items-center gap-1.5 shrink-0 ml-auto">
                               <span className="mono">{BRL(l.lancado)}</span>
                               {l.recebido == null ? (
                                 <>
