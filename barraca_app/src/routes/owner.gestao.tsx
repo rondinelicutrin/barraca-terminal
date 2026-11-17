@@ -45,7 +45,7 @@ const brlCurto = (n: number) => `R$${Math.round(n).toLocaleString("pt-BR")}`;
 const f2 = (n: number) => n.toFixed(2);
 
 function GestaoPage() {
-  const { state, dispatch } = useStore();
+  const { state } = useStore();
   const nav = useNavigate();
   const hoje = todayISO();
   const [from, setFrom] = useFiltro("gestao.from", addDias(hoje, -29));
@@ -343,52 +343,6 @@ function GestaoPage() {
                   <div className="flex justify-between gap-2 border-t border-border pt-1.5 text-sm font-semibold">
                     <span>= Malotes do período</span><span className="mono text-primary">{BRL(mal.malotes)}</span>
                   </div>
-                  {/* Conferência saco por saco: marca o que bateu e digita quanto veio quando foi diferente */}
-                  <details className="bg-background border border-border/60 rounded-md p-2" open={mal.conferidos > 0}>
-                    <summary className="cursor-pointer font-medium">
-                      Conferir saco por saco ({mal.conferidos} de {mal.lista.length} conferidos
-                      {mal.conferidos > 0 && Math.abs(mal.difConferida) > 0.004 && <span className="text-destructive"> · diferença {mal.difConferida > 0 ? "+" : ""}{BRL(mal.difConferida)}</span>})
-                    </summary>
-                    <div className="pt-2 space-y-1">
-                      {mal.lista.map((l) => {
-                        const dif = l.recebido != null ? l.recebido - l.lancado : 0;
-                        const quem = state.funcionarios.find((f) => f.username === (l.turno.fechadoPor ?? l.turno.employee))?.nome ?? l.turno.employee;
-                        return (
-                          <div key={l.turno.id} className={`flex flex-wrap items-center justify-between gap-x-2 gap-y-1 ${Math.abs(dif) > 0.004 ? "text-destructive font-semibold" : ""}`}>
-                            <span className="min-w-0">{rotuloTurno(l.turno)} · {quem}</span>
-                            <span className="flex items-center gap-1.5 shrink-0 ml-auto">
-                              <span className="mono">{BRL(l.lancado)}</span>
-                              {l.recebido == null ? (
-                                <>
-                                  <button type="button" aria-label={`Malote de ${rotuloTurno(l.turno)} bateu`} title="Bateu"
-                                    onClick={() => dispatch({ type: "CONFERIR_MALOTE", turnoId: l.turno.id, recebido: l.lancado })}
-                                    className="h-7 px-2 rounded border border-border hover:bg-success/20">✓</button>
-                                  <button type="button" aria-label={`Malote de ${rotuloTurno(l.turno)} veio diferente`} title="Veio diferente"
-                                    onClick={() => {
-                                      const v = prompt(`Malote de ${rotuloTurno(l.turno)} (${quem}): lançado ${BRL(l.lancado)}.\n\nQuanto veio no saco?`);
-                                      if (v == null || v.trim() === "") return;
-                                      const n = Number(v.replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", "."));
-                                      if (!Number.isFinite(n) || n < 0) { alert("Valor inválido."); return; }
-                                      dispatch({ type: "CONFERIR_MALOTE", turnoId: l.turno.id, recebido: Math.round(n * 100) / 100 });
-                                    }}
-                                    className="h-7 px-2 rounded border border-border hover:bg-destructive/20">≠</button>
-                                </>
-                              ) : (
-                                <button type="button" aria-label={`Desfazer conferência do malote de ${rotuloTurno(l.turno)}`}
-                                  onClick={() => confirm(`Desfazer a conferência do malote de ${rotuloTurno(l.turno)}?`) && dispatch({ type: "CONFERIR_MALOTE", turnoId: l.turno.id, recebido: null })}
-                                  className="h-7 px-2 rounded border border-border text-[11px]">
-                                  {Math.abs(dif) > 0.004 ? `veio ${BRL(l.recebido)} (${dif > 0 ? "+" : ""}${BRL(dif)})` : "✓ conferido"}
-                                </button>
-                              )}
-                            </span>
-                          </div>
-                        );
-                      })}
-                      <p className="text-[11px] text-muted-foreground pt-1">
-                        ✓ = o saco bateu com o lançado · ≠ = digite quanto veio. O "Meu caixa" usa o valor que veio no saco.
-                      </p>
-                    </div>
-                  </details>
                   {mal.quebras.length > 0 && (
                     <div className="bg-warning/10 border border-warning/40 rounded-md p-2 space-y-1">
                       <div className="font-semibold text-warning">⚠ Turno que começou com um caixa diferente do que o anterior deixou</div>

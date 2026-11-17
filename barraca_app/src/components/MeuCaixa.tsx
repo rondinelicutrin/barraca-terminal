@@ -18,8 +18,8 @@ export function MeuCaixa({ comAtalho = true }: { comAtalho?: boolean }) {
         <span className="mono text-lg font-bold text-primary">{BRL(c.saldo)}</span>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Dinheiro que veio nos malotes desde {formatDateBR(INICIO_MEU_CAIXA)} (o valor conferido no saco, quando conferido),
-        mais as inclusões e menos as retiradas de dinheiro lançadas em Pagamentos.
+        Malotes lançados nos turnos fechados desde {formatDateBR(INICIO_MEU_CAIXA)}, mais as inclusões e menos as retiradas
+        de dinheiro lançadas em Pagamentos. Para acertar com a contagem, lance uma retirada ou inclusão.
       </p>
       <div className="flex justify-between gap-2"><span>Malotes recebidos ({c.turnos} turnos fechados)</span><span className="mono">{BRL(c.malotes)}</span></div>
       <div className="flex justify-between gap-2"><span>+ Inclusões</span><span className="mono text-success">+{BRL(c.incluido)}</span></div>

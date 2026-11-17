@@ -50,8 +50,6 @@ export interface Turno {
   // Quem só passou para consumir (ex.: o dono ou alguém que veio deixar insumos): o consumo vai para a folha
   // e aparece no fechamento, mas a pessoa não trabalhou no turno (não precisa bater ponto).
   consumidores?: string[];
-  // Conferência do malote pelo dono: quanto veio de fato no saco (ausente = ainda não conferido)
-  maloteRecebido?: number;
   items: Record<string, ShiftItem>;
   caixa: Caixa;
   createdAt: number;
@@ -327,8 +325,6 @@ type Action =
   | { type: "ADD_SAIDA"; saida: SaidaCaixa }
   // Pessoa que só passou para consumir (não trabalhou no turno): entra no fechamento sem exigir ponto
   | { type: "ADD_CONSUMIDOR_TURNO"; turnoId: string; username: string }
-  // Dono confere o malote do turno: quanto veio no saco (null = desfaz a conferência)
-  | { type: "CONFERIR_MALOTE"; turnoId: string; recebido: number | null }
   | { type: "REMOVE_SAIDA"; turnoId: string; id: string }
   | { type: "SET_DESPESAS_FROM_DB"; despesas: DespesaCaixa[] }
   | { type: "SALVAR_DESPESA"; d: DespesaCaixa }
@@ -488,8 +484,6 @@ function itemToRow(turnoId: string, productId: string, it: ShiftItem) {
 
 // Quem só passou para consumir fica guardado no campos_preenchidos do turno (coluna que já existe)
 const PREFIXO_SO_CONSUMO = "soConsumo:";
-// Conferência do malote pelo dono: "maloteRecebido:<centavos>" (também sem coluna nova no banco)
-const PREFIXO_MALOTE = "maloteRecebido:";
 
 function caixaFromRow(row: any): Caixa {
   return {
@@ -503,8 +497,7 @@ function caixaFromRow(row: any): Caixa {
     maq2Ativa: row.maq2_ativa,
     maq2: { base: row.maq2_base, display: row.maq2_display, ate00: row.maq2_ate00 ?? undefined, apos00: row.maq2_apos00 ?? undefined },
     caixaFimPrev: row.caixa_fim_prev,
-    camposPreenchidos: Object.fromEntries(Object.entries((row.campos_preenchidos ?? {}) as Record<string, boolean>)
-      .filter(([k]) => !k.startsWith(PREFIXO_SO_CONSUMO) && !k.startsWith(PREFIXO_MALOTE))),
+    camposPreenchidos: Object.fromEntries(Object.entries((row.campos_preenchidos ?? {}) as Record<string, boolean>).filter(([k]) => !k.startsWith(PREFIXO_SO_CONSUMO))),
   };
 }
 
@@ -521,10 +514,6 @@ function turnoFromRow(row: any, items: Record<string, ShiftItem>): Turno {
     closedAt: row.closed_at ? new Date(row.closed_at).getTime() : undefined,
     fechadoPor: row.fechado_por ?? undefined,
     consumidores: Object.keys(row.campos_preenchidos ?? {}).filter((k) => k.startsWith(PREFIXO_SO_CONSUMO)).map((k) => k.slice(PREFIXO_SO_CONSUMO.length)),
-    maloteRecebido: (() => {
-      const k = Object.keys(row.campos_preenchidos ?? {}).find((x) => x.startsWith(PREFIXO_MALOTE));
-      return k ? Number(k.slice(PREFIXO_MALOTE.length)) / 100 : undefined;
-    })(),
     editado: row.editado ?? false,
     precosSnapshot: row.precos_snapshot ?? {},
   };
@@ -555,11 +544,7 @@ function turnoToRow(t: Turno) {
     maq2_ate00: c.maq2.ate00 ?? null,
     maq2_apos00: c.maq2.apos00 ?? null,
     // Quem só passou para consumir vai junto, como "soConsumo:<usuario>" (não precisa de coluna nova no banco)
-    campos_preenchidos: {
-      ...c.camposPreenchidos,
-      ...Object.fromEntries((t.consumidores ?? []).map((u) => [PREFIXO_SO_CONSUMO + u, true])),
-      ...(t.maloteRecebido != null ? { [PREFIXO_MALOTE + Math.round(t.maloteRecebido * 100)]: true } : {}),
-    },
+    campos_preenchidos: { ...c.camposPreenchidos, ...Object.fromEntries((t.consumidores ?? []).map((u) => [PREFIXO_SO_CONSUMO + u, true])) },
     precos_snapshot: t.precosSnapshot,
     closed_at: t.closedAt ? new Date(t.closedAt).toISOString() : null,
     editado: t.editado ?? false,
@@ -881,7 +866,7 @@ function reducer(s: State, a: Action): State {
     }
     case "EDIT_HIST": {
       // As saídas do caixa têm lançamento próprio (ADD/REMOVE_SAIDA): a correção não as sobrescreve
-      const historico = s.historico.map((t) => (t.id === a.id ? { ...a.turno, saidas: t.saidas, consumidores: t.consumidores, maloteRecebido: t.maloteRecebido, editado: true } : t));
+      const historico = s.historico.map((t) => (t.id === a.id ? { ...a.turno, saidas: t.saidas, consumidores: t.consumidores, editado: true } : t));
       n = {
         ...s,
         historico,
@@ -896,7 +881,7 @@ function reducer(s: State, a: Action): State {
       if (!s.turnoAtivo || s.turnoAtivo.id !== a.turno.id) return s;
       n = {
         ...s,
-        turnoAtivo: { ...a.turno, saidas: s.turnoAtivo.saidas, consumidores: s.turnoAtivo.consumidores, maloteRecebido: s.turnoAtivo.maloteRecebido, editado: true },
+        turnoAtivo: { ...a.turno, saidas: s.turnoAtivo.saidas, consumidores: s.turnoAtivo.consumidores, editado: true },
         // Correção do turno em andamento também já atualiza a quantidade em estoque atual
         estoqueQtd: syncEstoqueFromTurno(s.estoqueQtd, a.turno),
       };
@@ -1060,11 +1045,6 @@ function reducer(s: State, a: Action): State {
     case "REMOVE_ITEM_SEMANA": {
       const { [a.id]: _removido, ...resto } = s.itensSemana;
       n = { ...s, itensSemana: resto }; break;
-    }
-    case "CONFERIR_MALOTE": {
-      const mudar = (t: Turno): Turno => t.id !== a.turnoId ? t : { ...t, maloteRecebido: a.recebido ?? undefined };
-      n = { ...s, turnoAtivo: s.turnoAtivo ? mudar(s.turnoAtivo) : null, historico: s.historico.map(mudar) };
-      break;
     }
     case "ADD_CONSUMIDOR_TURNO": {
       const mudar = (t: Turno): Turno => t.id !== a.turnoId || (t.consumidores ?? []).includes(a.username) ? t
@@ -2569,8 +2549,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       enviar("ponto", a, a.type === "UPDATE_PONTO_CONSUMO" ? { chave: `pc:${a.pontoId}|${a.productId}` } : {});
     } else if (a.type === "ADD_RETIRADA" || a.type === "REMOVE_RETIRADA") {
       enviar("retirada", a);
-    } else if (a.type === "ADD_CONSUMIDOR_TURNO" || a.type === "CONFERIR_MALOTE") {
-      // Só o cabeçalho do turno muda (quem só consumiu / conferência do malote): não reenvia os produtos
+    } else if (a.type === "ADD_CONSUMIDOR_TURNO") {
+      // Só o cabeçalho do turno muda (a lista de quem só consumiu): não reenvia os produtos
       if (antes.turnoAtivo?.id === a.turnoId) turnoSujoRef.current = true;
       else { histPendentesRef.current.add(a.turnoId); histItensRef.current.set(a.turnoId, unirItensAlterados(histItensRef.current.get(a.turnoId) ?? {}, {})); }
     } else if (a.type === "ADD_SAIDA" || a.type === "REMOVE_SAIDA") {
