@@ -12,7 +12,7 @@ import { DatePickerBR } from "@/components/ui/date-picker-br";
 import { gerarRelatorioPdf, type PdfSection } from "@/lib/pdf";
 import { baixarCsv } from "@/lib/csv";
 import {
-  TURNOS, linhasDoPeriodo, totaisGerais, liquidoDoPeriodo, porFuncionario, porTipoTurno, matrizFuncTurno,
+  TURNOS, linhasDoPeriodo, totaisGerais, liquidoDoPeriodo, malotesDoPeriodo, porFuncionario, porTipoTurno, matrizFuncTurno,
   agruparPor, sobrasPorProduto, consumoPorFuncionario, faturamentoJanelas, rotuloPeriodo, addDias, diasEntre,
   type ModoAgrupar,
 } from "@/lib/gestao";
@@ -66,6 +66,7 @@ function GestaoPage() {
   const linhas = useMemo(() => linhasDoPeriodo(state, from, to), [state, from, to]);
   const tot = useMemo(() => totaisGerais(linhas), [linhas]);
   const liq = useMemo(() => liquidoDoPeriodo(state, from, to), [state, from, to]);
+  const mal = useMemo(() => malotesDoPeriodo(state, from, to), [state, from, to]);
   const funcs = useMemo(() => porFuncionario(linhas), [linhas]);
   const tiposTurno = useMemo(() => porTipoTurno(state, linhas), [state, linhas]);
   const matriz = useMemo(() => matrizFuncTurno(linhas), [linhas]);
@@ -321,6 +322,44 @@ function GestaoPage() {
                 </>
               )}
             </Card>
+
+            <Card titulo="💼 Malotes do período">
+              {!mal ? <Vazio /> : (
+                <div className="space-y-1.5 text-xs">
+                  <p className="text-[11px] text-muted-foreground">
+                    Soma dos malotes lançados nos turnos fechados (confira com o dinheiro dos sacos). O "Dinheiro" do gráfico
+                    acima é o dinheiro vendido; a diferença é o dinheiro que fica no caixa de um turno para o outro.
+                  </p>
+                  <LinhaMalote rotulo="Dinheiro vendido (gráfico acima)" valor={mal.vendido} />
+                  {mal.saidas > 0.004 && <LinhaMalote rotulo="− Saídas do caixa (despesas pagas)" valor={-mal.saidas} />}
+                  <LinhaMalote rotulo={`+ Caixa no começo (caixa anterior: ${rotuloTurno(mal.primeiro)})`} valor={mal.inicio} />
+                  <LinhaMalote rotulo={`− Caixa no fim (ficou no caixa: ${rotuloTurno(mal.ultimo)})`} valor={-mal.fim} />
+                  {mal.quebras.length > 0 && (
+                    <LinhaMalote rotulo={`± Quebras na sequência do caixa (${mal.quebras.length})`} valor={mal.somaQuebras} destaque />
+                  )}
+                  <div className="flex justify-between gap-2 border-t border-border pt-1.5 text-sm font-semibold">
+                    <span>= Malotes do período</span><span className="mono text-primary">{BRL(mal.malotes)}</span>
+                  </div>
+                  {mal.quebras.length > 0 && (
+                    <div className="bg-warning/10 border border-warning/40 rounded-md p-2 space-y-1">
+                      <div className="font-semibold text-warning">⚠ Turno que começou com um caixa diferente do que o anterior deixou</div>
+                      {mal.quebras.map((q) => (
+                        <button key={q.turno.id} type="button" onClick={() => nav({ to: "/owner/turno/$id", params: { id: q.turno.id } })}
+                          className="w-full text-left hover:underline">
+                          {rotuloTurno(q.turno)} começou com {BRL(q.comecou)}, mas {rotuloTurno(q.anterior)} deixou {BRL(q.deixou)}
+                          {" "}({q.diferenca > 0 ? "+" : ""}{BRL(q.diferenca)}) ✏️
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {mal.aberto && (
+                    <p className="text-[11px] text-muted-foreground">
+                      O turno {rotuloTurno(mal.aberto)} ainda está aberto: o malote dele entra quando ele for fechado.
+                    </p>
+                  )}
+                </div>
+              )}
+            </Card>
           </>
         )}
 
@@ -568,6 +607,17 @@ function Grafico({ altura, children }: { altura: number; children: React.ReactEl
   return (
     <div style={{ width: "100%", height: altura }}>
       <ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer>
+    </div>
+  );
+}
+
+const PERIODO_NOME: Record<string, string> = { manha: "Manhã", tarde: "Tarde", noite: "Noite" };
+const rotuloTurno = (t: { date: string; shift: string }) => `${formatDateBR(t.date).slice(0, 5)} ${PERIODO_NOME[t.shift] ?? t.shift}`;
+
+function LinhaMalote({ rotulo, valor, destaque = false }: { rotulo: string; valor: number; destaque?: boolean }) {
+  return (
+    <div className={`flex justify-between gap-2 ${destaque ? "text-warning font-semibold" : ""}`}>
+      <span>{rotulo}</span><span className="mono shrink-0">{valor > 0.004 && rotulo.startsWith("±") ? "+" : ""}{BRL(valor)}</span>
     </div>
   );
 }

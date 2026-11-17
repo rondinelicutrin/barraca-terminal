@@ -2,7 +2,7 @@
 // dos pontos (consumo) e das retiradas/pagamentos — nada é gravado, só calculado a partir do que já existe.
 import {
   getAllProducts, esperadoTurno, arrecadadoTurno, resumoPagamentos, valorConsumoPonto, nomeMaquina, movimentosDinheiro,
-  type State, type Turno, type ShiftKey,
+  totalSaidas, type State, type Turno, type ShiftKey,
 } from "@/lib/store";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 
@@ -98,6 +98,33 @@ export function totaisGerais(linhas: LinhaTurno[]) {
     saldo: bruto - esperado,
     turnos: linhas.length,
     media: linhas.length ? bruto / linhas.length : 0,
+  };
+}
+
+// Malotes do período: a soma dos malotes lançados nos turnos fechados e a conferência com o "Dinheiro"
+// (dinheiro vendido). Os dois não são iguais porque parte do dinheiro fica no caixa de um turno para o outro:
+//   malotes = dinheiro vendido − saídas do caixa + caixa no começo − caixa no fim + quebras na sequência
+// Quebra na sequência = turno que começou com um "caixa anterior" diferente do que o turno de antes deixou.
+const ORDEM_PERIODO: Record<string, number> = { manha: 0, tarde: 1, noite: 2 };
+export interface QuebraCaixa { turno: Turno; anterior: Turno; comecou: number; deixou: number; diferenca: number }
+export function malotesDoPeriodo(state: State, from: string, to: string) {
+  const ts = state.historico
+    .filter((t) => t.date >= from && t.date <= to)
+    .sort((a, b) => a.date.localeCompare(b.date) || (ORDEM_PERIODO[a.shift] ?? 9) - (ORDEM_PERIODO[b.shift] ?? 9));
+  if (ts.length === 0) return null;
+  const fica = (t: Turno) => (t.caixa.dinheiroFinal || 0) - (t.caixa.dinheiroMalote || 0);
+  const malotes = ts.reduce((s, t) => s + (t.caixa.dinheiroMalote || 0), 0);
+  const vendido = ts.reduce((s, t) => s + (t.caixa.dinheiroFinal || 0) - (t.caixa.caixaFimPrev || 0) + totalSaidas(t), 0);
+  const saidas = ts.reduce((s, t) => s + totalSaidas(t), 0);
+  const quebras: QuebraCaixa[] = ts.slice(1)
+    .map((t, i) => ({ turno: t, anterior: ts[i], comecou: t.caixa.caixaFimPrev || 0, deixou: fica(ts[i]), diferenca: (t.caixa.caixaFimPrev || 0) - fica(ts[i]) }))
+    .filter((q) => Math.abs(q.diferenca) > 0.004);
+  const aberto = state.turnoAtivo && state.turnoAtivo.date >= from && state.turnoAtivo.date <= to ? state.turnoAtivo : null;
+  return {
+    malotes, vendido, saidas,
+    inicio: ts[0].caixa.caixaFimPrev || 0, primeiro: ts[0],
+    fim: fica(ts[ts.length - 1]), ultimo: ts[ts.length - 1],
+    quebras, somaQuebras: quebras.reduce((s, q) => s + q.diferenca, 0), aberto,
   };
 }
 
