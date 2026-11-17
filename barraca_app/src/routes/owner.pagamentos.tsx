@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
 import { useStore, resumoPagamentos, nomeMaquina, ehInclusao, movimentosDinheiro, type Retirada } from "@/lib/store";
 import { BRL, formatDateBR, todayISO } from "@/lib/format";
+import { MeuCaixa } from "@/components/MeuCaixa";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
@@ -198,6 +199,9 @@ function PagamentosPage() {
             <div className="flex justify-between"><span className="text-muted-foreground">Voucher</span><span className="mono">{BRL(resumo.voucher)}</span></div>
           </div>
         </div>
+
+        {/* Dinheiro físico do dono (malotes + inclusões − retiradas): atualiza a cada lançamento abaixo */}
+        <MeuCaixa comAtalho={false} />
 
         {/* Dinheiro: retiradas e inclusões do caixa */}
         <div className="bg-card border border-border rounded-xl p-3 space-y-3">

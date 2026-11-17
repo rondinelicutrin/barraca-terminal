@@ -120,12 +120,30 @@ export function malotesDoPeriodo(state: State, from: string, to: string) {
     .map((t, i) => ({ turno: t, anterior: ts[i], comecou: t.caixa.caixaFimPrev || 0, deixou: fica(ts[i]), diferenca: (t.caixa.caixaFimPrev || 0) - fica(ts[i]) }))
     .filter((q) => Math.abs(q.diferenca) > 0.004);
   const aberto = state.turnoAtivo && state.turnoAtivo.date >= from && state.turnoAtivo.date <= to ? state.turnoAtivo : null;
+  // Conferência saco por saco: o que foi lançado no turno × o que veio no saco (dono marca)
+  const lista = ts.map((t) => ({ turno: t, lancado: t.caixa.dinheiroMalote || 0, recebido: t.maloteRecebido }));
+  const conferidos = lista.filter((l) => l.recebido != null);
+  const difConferida = conferidos.reduce((s, l) => s + (l.recebido as number) - l.lancado, 0);
   return {
-    malotes, vendido, saidas,
+    malotes, vendido, saidas, lista, conferidos: conferidos.length, difConferida,
     inicio: ts[0].caixa.caixaFimPrev || 0, primeiro: ts[0],
     fim: fica(ts[ts.length - 1]), ultimo: ts[ts.length - 1],
     quebras, somaQuebras: quebras.reduce((s, q) => s + q.diferenca, 0), aberto,
   };
+}
+
+// Meu caixa (dinheiro físico do dono): todos os malotes dos turnos fechados desde o início (26/10/2026) —
+// o valor que veio no saco quando foi conferido, senão o lançado no turno — mais as inclusões e menos as
+// retiradas de dinheiro lançadas em Pagamentos. Ajustes de contagem também entram como retirada/inclusão.
+export const INICIO_MEU_CAIXA = "2026-10-26";
+export function meuCaixa(state: State) {
+  const ts = state.historico.filter((t) => t.date >= INICIO_MEU_CAIXA);
+  const malotes = ts.reduce((s, t) => s + (t.maloteRecebido ?? (t.caixa.dinheiroMalote || 0)), 0);
+  const movs = state.retiradas.filter((r) => r.date >= INICIO_MEU_CAIXA && (r.origem ?? "dinheiro") === "dinheiro");
+  const { retirado, incluido } = movimentosDinheiro(movs);
+  const aberto = state.turnoAtivo && state.turnoAtivo.date >= INICIO_MEU_CAIXA ? state.turnoAtivo : null;
+  return { malotes, turnos: ts.length, retirado, incluido, saldo: malotes + incluido - retirado, aberto,
+    ultimos: [...movs].sort((a, b) => b.date.localeCompare(a.date) || b.criadoEm - a.criadoEm).slice(0, 5) };
 }
 
 // Bruto x líquido do período, usando a mesma regra do menu Pagamentos:
