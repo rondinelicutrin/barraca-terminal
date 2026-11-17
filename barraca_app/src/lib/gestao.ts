@@ -128,6 +128,20 @@ export function malotesDoPeriodo(state: State, from: string, to: string) {
   };
 }
 
+// Meu caixa (dinheiro físico do dono): todos os malotes lançados nos turnos fechados desde o início
+// (26/10/2026), mais as inclusões e menos as retiradas de dinheiro lançadas em Pagamentos. Diferenças de
+// contagem o dono acerta manualmente com uma retirada ou inclusão.
+export const INICIO_MEU_CAIXA = "2026-10-26";
+export function meuCaixa(state: State) {
+  const ts = state.historico.filter((t) => t.date >= INICIO_MEU_CAIXA);
+  const malotes = ts.reduce((s, t) => s + (t.caixa.dinheiroMalote || 0), 0);
+  const movs = state.retiradas.filter((r) => r.date >= INICIO_MEU_CAIXA && (r.origem ?? "dinheiro") === "dinheiro");
+  const { retirado, incluido } = movimentosDinheiro(movs);
+  const aberto = state.turnoAtivo && state.turnoAtivo.date >= INICIO_MEU_CAIXA ? state.turnoAtivo : null;
+  return { malotes, turnos: ts.length, retirado, incluido, saldo: malotes + incluido - retirado, aberto,
+    ultimos: [...movs].sort((a, b) => b.date.localeCompare(a.date) || b.criadoEm - a.criadoEm).slice(0, 5) };
+}
+
 // Bruto x líquido do período, usando a mesma regra do menu Pagamentos:
 // líquido = dinheiro (+ inclusões − retiradas) + moedas + pix + voucher + cada maquininha (− taxa − pagamentos).
 // Inclusões de dinheiro não são venda: entram no líquido, mas não no bruto.

@@ -17,6 +17,7 @@ import {
   type ModoAgrupar,
 } from "@/lib/gestao";
 import { useFiltro } from "@/lib/filtros";
+import { MeuCaixa } from "@/components/MeuCaixa";
 import { ehSemanaInteira, NavegarSemana } from "@/components/PeriodoComSemana";
 import { inicioSemana, fimSemana } from "@/lib/folha";
 
@@ -322,6 +323,8 @@ function GestaoPage() {
                 </>
               )}
             </Card>
+
+            <MeuCaixa />
 
             <Card titulo="💼 Malotes do período">
               {!mal ? <Vazio /> : (
