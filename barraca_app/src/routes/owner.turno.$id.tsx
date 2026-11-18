@@ -162,6 +162,10 @@ function EditTurno() {
 
       {tab === "produtos" ? (
         <div className="p-3 space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            Consumo de funcionário: lance no bloco "🍽 Consumo dos funcionários do turno" (acima) — ele vai para a folha da pessoa
+            e para a coluna Consumo do turno juntos.
+          </p>
           {products.map((p) => {
             const it = local.items[p.id];
             if (!it) return null;
@@ -197,9 +201,12 @@ function EditTurno() {
                 <div className="grid grid-cols-2 gap-1.5 mt-1.5">
                   <label className="flex flex-col">
                     <span className="text-[10px] text-muted-foreground uppercase">Consumo func.</span>
+                    {/* Só leitura: consumo é lançado no bloco "🍽 Consumo dos funcionários" (vai junto para a folha da pessoa).
+                        Mudar aqui alterava só o estoque do turno e o consumo ficava sem dono na folha. */}
                     <BufferedNumberInput
-                      value={it.consumo} decimal={false} className="text-center"
-                      onChange={(n) => updItem(p.id, { consumo: n })}
+                      value={it.consumo} decimal={false} className="text-center opacity-60" readOnly
+                      aria-label={`Consumo func. de ${p.name} (lançado no bloco de consumo)`}
+                      onChange={() => {}}
                     />
                   </label>
                   <label className="flex flex-col">

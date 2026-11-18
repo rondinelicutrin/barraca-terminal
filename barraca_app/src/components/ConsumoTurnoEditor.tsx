@@ -46,15 +46,17 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
 }) {
   const { state, dispatch } = useStore();
   const products = getAllProducts(state);
-  const [novo, setNovo] = useState<Record<string, { pid: string; qtd: number }>>({});
+  // Formulário único: pessoa → item → quantidade → Incluir (só aparece na lista quem tem consumo lançado)
+  const [novo, setNovo] = useState<{ pessoa: string; pid: string; qtd: number }>({ pessoa: "", pid: "", qtd: 1 });
   const nome = (u: string) => state.funcionarios.find((f) => f.username === u)?.nome ?? u;
   const nomeProd = (pid: string) => products.find((p) => p.id === pid)?.name ?? pid;
   // Quem trabalhou no turno e quem só passou para consumir (lista guardada no turno, lida do estado atual)
   const atual = state.turnoAtivo?.id === local.id ? state.turnoAtivo : state.historico.find((h) => h.id === local.id);
   const soConsumo = atual?.consumidores ?? local.consumidores ?? [];
-  const pessoas = [...new Set([local.employee, ...(local.outrosFuncionarios ?? []), ...soConsumo])];
   const trabalhou = new Set([local.employee, ...(local.outrosFuncionarios ?? [])]);
-  const disponiveis = state.funcionarios.filter((f) => !f.excluido && f.ativo !== false && !pessoas.includes(f.username));
+  const pessoas = [...new Set([local.employee, ...(local.outrosFuncionarios ?? []), ...soConsumo])];
+  // Opções do formulário: primeiro quem está no turno, depois os outros funcionários cadastrados (colegas que só consumiram)
+  const outrosCadastrados = state.funcionarios.filter((f) => !f.excluido && f.ativo !== false && !trabalhou.has(f.username));
   const pontosDe = (u: string) => state.pontos.filter((p) => p.employeeUsername === u && p.date === local.date);
   const qtd = (u: string, pid: string) =>
     pontosDe(u).reduce((s, p) => s + (p.consumo.find((c) => c.productId === pid)?.qty ?? 0), 0);
@@ -139,64 +141,82 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
               : "Altere a quantidade (0 tira o item) ou inclua o que foi esquecido. Grava na hora: entra na folha da pessoa e na coluna Consumo do turno (o esperado do fechamento é recalculado)."}
         </p>
       </div>
-      {pessoas.map((u) => {
-        const itens = itensDe(u);
-        const valores = valoresConsumoPonto(state, u, itens);
-        const n = novo[u] ?? { pid: "", qtd: 1 };
+      {(() => {
+        const comConsumo = pessoas.filter((u) => itensDe(u).length > 0);
+        const semConsumo = [...trabalhou].filter((u) => itensDe(u).length === 0);
         return (
-          <div key={u} className="bg-background border border-border/60 rounded-lg p-2 space-y-1.5">
-            <div className="flex justify-between text-xs font-semibold">
-              <span>{nome(u)}{naPonto && u === eu ? " (você)" : ""}{!trabalhou.has(u) && <span className="font-normal text-muted-foreground"> · só consumo</span>}</span>
-              <span className="mono">{BRL(valorConsumoPonto(state, u, itens))}</span>
-            </div>
-            {itens.length === 0 && (
-              <div className={`text-[11px] ${naPonto ? "text-warning font-semibold" : "text-muted-foreground"}`}>
-                {naPonto ? "⚠ Nenhum consumo lançado" : "Nenhum consumo lançado."}
-              </div>
-            )}
-            {itens.map((c) => {
-              const rot = `${nomeProd(c.productId)} de ${nome(u)}`;
-              const v = valores[c.productId] ?? 0;
+          <>
+            {comConsumo.length === 0 && <div className="text-[11px] text-muted-foreground">Nenhum consumo lançado neste turno.</div>}
+            {comConsumo.map((u) => {
+              const itens = itensDe(u);
+              const valores = valoresConsumoPonto(state, u, itens);
               return (
-                <div key={c.productId} className="flex items-center justify-between gap-2 text-xs">
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    {somenteLeitura ? <span className="mono w-6 text-right">{c.qty}x</span>
-                      : naPonto ? <MenosMais qtd={c.qty} rotulo={rot} onChange={(q) => tirarOuDefinir(u, c.productId, q)} />
-                      : <BufferedNumberInput value={c.qty} decimal={false} className="w-14 h-8 text-xs" aria-label={`Consumo de ${nome(u)}: ${nomeProd(c.productId)}`}
-                          onChange={() => {}} onBlur={(q) => tirarOuDefinir(u, c.productId, q)} />}
-                    <span className="truncate">{naPonto ? "" : "× "}{nomeProd(c.productId)}</span>
-                  </span>
-                  <span className="mono shrink-0">{naPonto && v < 0.005 ? "grátis" : BRL(v)}</span>
+                <div key={u} className="bg-background border border-border/60 rounded-lg p-2 space-y-1.5">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span>{nome(u)}{naPonto && u === eu ? " (você)" : ""}{!trabalhou.has(u) && <span className="font-normal text-muted-foreground"> · só consumo</span>}</span>
+                    <span className="mono">{BRL(valorConsumoPonto(state, u, itens))}</span>
+                  </div>
+                  {itens.map((c) => {
+                    const rot = `${nomeProd(c.productId)} de ${nome(u)}`;
+                    const v = valores[c.productId] ?? 0;
+                    return (
+                      <div key={c.productId} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          {somenteLeitura ? <span className="mono w-6 text-right">{c.qty}x</span>
+                            : naPonto ? <MenosMais qtd={c.qty} rotulo={rot} onChange={(q) => tirarOuDefinir(u, c.productId, q)} />
+                            : <BufferedNumberInput value={c.qty} decimal={false} className="w-14 h-8 text-xs" aria-label={`Consumo de ${nome(u)}: ${nomeProd(c.productId)}`}
+                                onChange={() => {}} onBlur={(q) => tirarOuDefinir(u, c.productId, q)} />}
+                          <span className="truncate">{naPonto ? "" : "× "}{nomeProd(c.productId)}</span>
+                        </span>
+                        <span className="mono shrink-0">{v < 0.005 ? "grátis" : BRL(v)}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
+            {naPonto && !somenteLeitura && semConsumo.length > 0 && (
+              <div className="text-[11px] text-warning font-semibold">⚠ Sem consumo lançado: {semConsumo.map(nome).join(", ")}</div>
+            )}
             {!somenteLeitura && (
-              <div className="flex items-center gap-1.5">
-                <select value={n.pid} aria-label={`Produto para incluir no consumo de ${nome(u)}`}
-                  onChange={(e) => setNovo({ ...novo, [u]: { ...n, pid: e.target.value } })}
-                  className="flex-1 min-w-0 h-9 rounded-md bg-input border border-border px-2 text-xs">
-                  <option value="">+ incluir item…</option>
-                  {products.filter((p) => p.saleable).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              <div className="bg-background border border-border/60 rounded-lg p-2 space-y-1.5">
+                <div className="text-[11px] font-semibold">+ Incluir consumo</div>
+                <select value={novo.pessoa} aria-label="Pessoa do consumo" onChange={(e) => setNovo({ ...novo, pessoa: e.target.value })}
+                  className="w-full h-9 rounded-md bg-input border border-border px-2 text-xs">
+                  <option value="">De quem?</option>
+                  <optgroup label="No turno">
+                    {[...trabalhou].map((u) => <option key={u} value={u}>{nome(u)}{naPonto && u === eu ? " (você)" : ""}</option>)}
+                  </optgroup>
+                  {outrosCadastrados.length > 0 && (
+                    <optgroup label="Colegas que só consumiram">
+                      {outrosCadastrados.map((f) => <option key={f.username} value={f.username}>{f.nome}</option>)}
+                    </optgroup>
+                  )}
                 </select>
-                <BufferedNumberInput value={n.qtd} decimal={false} className="w-12 h-9 text-xs" aria-label={`Quantidade a incluir para ${nome(u)}`}
-                  onChange={(q) => setNovo({ ...novo, [u]: { ...n, qtd: q } })} />
-                <Button variant="secondary" className="h-9 px-2 text-xs" disabled={!n.pid || n.qtd <= 0}
-                  onClick={() => { definir(u, n.pid, qtd(u, n.pid) + n.qtd); setNovo({ ...novo, [u]: { pid: "", qtd: 1 } }); }}>
-                  Incluir
-                </Button>
+                <div className="flex items-center gap-1.5">
+                  <select value={novo.pid} aria-label="Produto do consumo" onChange={(e) => setNovo({ ...novo, pid: e.target.value })}
+                    className="flex-1 min-w-0 h-9 rounded-md bg-input border border-border px-2 text-xs">
+                    <option value="">Item…</option>
+                    {products.filter((p) => p.saleable).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <BufferedNumberInput value={novo.qtd} decimal={false} className="w-12 h-9 text-xs" aria-label="Quantidade do consumo"
+                    onChange={(q) => setNovo({ ...novo, qtd: q })} />
+                  <Button variant="secondary" className="h-9 px-2 text-xs" disabled={!novo.pessoa || !novo.pid || novo.qtd <= 0}
+                    onClick={() => {
+                      const u = novo.pessoa;
+                      // Colega que não trabalhou no turno: fica guardado no turno como "só consumo" (sem exigir ponto)
+                      if (!trabalhou.has(u) && !soConsumo.includes(u)) dispatch({ type: "ADD_CONSUMIDOR_TURNO", turnoId: local.id, username: u });
+                      definir(u, novo.pid, qtd(u, novo.pid) + novo.qtd);
+                      setNovo({ pessoa: u, pid: "", qtd: 1 });
+                    }}>
+                    Incluir
+                  </Button>
+                </div>
               </div>
             )}
-          </div>
+          </>
         );
-      })}
-      {!somenteLeitura && disponiveis.length > 0 && (
-        <select value="" aria-label="Incluir outra pessoa no consumo do turno"
-          onChange={(e) => e.target.value && dispatch({ type: "ADD_CONSUMIDOR_TURNO", turnoId: local.id, username: e.target.value })}
-          className="w-full h-9 rounded-md bg-input border border-border px-2 text-xs">
-          <option value="">+ incluir consumo dos colegas…</option>
-          {disponiveis.map((f) => <option key={f.username} value={f.username}>{f.nome}</option>)}
-        </select>
-      )}
+      })()}
     </div>
   );
 }
