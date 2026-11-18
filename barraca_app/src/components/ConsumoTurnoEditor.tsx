@@ -66,6 +66,10 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
     return Object.entries(m).filter(([, q]) => q > 0).map(([productId, q]) => ({ productId, qty: q }));
   };
   const naPonto = modo === "ponto";
+  // Quanto da coluna Consumo do turno não está no ponto de ninguém do turno (ex.: lançado direto no estoque)
+  const itensTurno = (isAtivo && state.turnoAtivo ? state.turnoAtivo.items : atual?.items ?? local.items);
+  const semDono = (pid: string) => Math.max(0, (itensTurno[pid]?.consumo || 0) - pessoas.reduce((s, u) => s + qtd(u, pid), 0));
+  const semDonoLista = products.filter((p) => semDono(p.id) > 0).map((p) => `${semDono(p.id)}x ${p.name}`);
   const eu = state.currentUser?.username;
 
   // Ajusta a coluna Consumo do turno (estoque) pela diferença
@@ -88,16 +92,22 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
     const delta = Math.round(novoTotal) - atual;
     if (delta === 0 || novoTotal < 0) return;
     const it = (isAtivo && state.turnoAtivo ? state.turnoAtivo.items : local.items)[pid];
-    if (delta > 0) {
+    // Consumo "sem dono" (já está no estoque do turno, mas não no ponto de ninguém): ao incluir para a pessoa,
+    // usa primeiro esse consumo — ele já saiu do estoque, então não soma de novo na coluna Consumo do turno
+    const usaSemDono = delta > 0 ? Math.min(delta, semDono(pid)) : 0;
+    const deltaTurno = delta - usaSemDono;
+    if (deltaTurno > 0) {
       if (naPonto) {
         // Turno aberto: não deixa tirar do estoque mais do que tem
         const disp = disponivelPara(it, "consumo");
-        if (delta > disp) { avisoSemEstoque(nomeProd(pid), it, disp); return; }
+        if (deltaTurno > disp) { avisoSemEstoque(nomeProd(pid), it, disp); return; }
       } else if (local.closedAt && it) {
         // Correção do dono: consumo maior do que o que saiu do estoque deixaria o "vendido" negativo
         const livre = it.entrada + (it.chegada ?? 0) - (it.sobra ?? 0) - (it.consumo || 0) - (it.descarte || 0) - (it.consumoEst || 0);
-        if (delta > livre && !confirm(`${nomeProd(pid)}: só ${Math.max(0, livre)} unidade(s) saíram do estoque sem consumo/descarte neste turno (entrada + chegada − sobra). Lançar ${delta} mesmo assim?`)) return;
+        if (deltaTurno > livre && !confirm(`${nomeProd(pid)}: só ${Math.max(0, livre)} unidade(s) saíram do estoque sem consumo/descarte neste turno (entrada + chegada − sobra). Lançar ${deltaTurno} mesmo assim?`)) return;
       }
+    }
+    if (delta > 0) {
       const ps = pontosDe(u);
       const alvo = ps.find((p) => p.consumo.some((c) => c.productId === pid)) ?? ps.find((p) => !ehSoConsumo(p)) ?? ps[0];
       if (alvo) {
@@ -117,7 +127,7 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
         resto -= tira;
       }
     }
-    ajustarTurno(pid, delta);
+    if (deltaTurno !== 0) ajustarTurno(pid, deltaTurno);
   };
   const tirarOuDefinir = (u: string, pid: string, q: number) => {
     if (q <= 0) {
@@ -175,6 +185,11 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
                 </div>
               );
             })}
+            {!somenteLeitura && semDonoLista.length > 0 && (
+              <div className="text-[11px] text-warning font-semibold bg-warning/10 border border-warning/40 rounded-md p-2">
+                ⚠ Consumo sem dono neste turno: {semDonoLista.join(", ")}. Inclua abaixo para quem consumiu (não soma de novo no estoque).
+              </div>
+            )}
             {naPonto && !somenteLeitura && semConsumo.length > 0 && (
               <div className="text-[11px] text-warning font-semibold">⚠ Sem consumo lançado: {semConsumo.map(nome).join(", ")}</div>
             )}
@@ -201,7 +216,7 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
                   </select>
                   <BufferedNumberInput value={novo.qtd} decimal={false} className="w-12 h-9 text-xs" aria-label="Quantidade do consumo"
                     onChange={(q) => setNovo({ ...novo, qtd: q })} />
-                  <Button variant="secondary" className="h-9 px-2 text-xs" disabled={!novo.pessoa || !novo.pid || novo.qtd <= 0}
+                  <Button variant="secondary" className="h-9 px-2 text-xs" aria-label="Incluir consumo" disabled={!novo.pessoa || !novo.pid || novo.qtd <= 0}
                     onClick={() => {
                       const u = novo.pessoa;
                       // Colega que não trabalhou no turno: fica guardado no turno como "só consumo" (sem exigir ponto)
