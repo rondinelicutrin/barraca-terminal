@@ -25,6 +25,34 @@ function avisoSemEstoque(nome: string, it: ShiftItem | undefined, disp: number) 
       : `Só ${disp} unidade(s) de ${nome} disponíveis no estoque do turno (entrada + chegada − o que já saiu).`);
 }
 
+// Lança (+) ou tira (−) consumo só na folha da pessoa (ponto do dia do turno). Usado pelo campo "Consumo func."
+// do Histórico → ✏️ (aba Produtos): quem muda o número ali já mexe no estoque do turno; isto leva a mesma
+// diferença para o ponto da pessoa, para aparecer na folha e no fechamento.
+type StoreCtx = ReturnType<typeof useStore>;
+export function ajustarFolhaConsumo(state: StoreCtx["state"], dispatch: StoreCtx["dispatch"], u: string, date: string, pid: string, delta: number) {
+  const ps = state.pontos.filter((p) => p.employeeUsername === u && p.date === date);
+  if (delta > 0) {
+    const alvo = ps.find((p) => p.consumo.some((c) => c.productId === pid)) ?? ps.find((p) => !ehSoConsumo(p)) ?? ps[0];
+    if (alvo) {
+      const q = alvo.consumo.find((c) => c.productId === pid)?.qty ?? 0;
+      dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: alvo.id, productId: pid, qty: q + delta });
+    } else {
+      dispatch({ type: "ADD_PONTO", p: { id: crypto.randomUUID(), employeeUsername: u, date, entrada: "00:00", saida: "00:00",
+        transporte: 0, refeicao: 0, colegas: [], consumo: [{ productId: pid, qty: delta }] } });
+    }
+    return delta;
+  }
+  let resto = -delta;
+  for (const p of [...ps].reverse()) {
+    const q = p.consumo.find((c) => c.productId === pid)?.qty ?? 0;
+    if (!q || resto <= 0) continue;
+    const tira = Math.min(q, resto);
+    dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: p.id, productId: pid, qty: q - tira });
+    resto -= tira;
+  }
+  return delta + resto; // quanto foi tirado de fato (negativo)
+}
+
 // Quantidade com botões − e + (no celular, digitar a quantidade gerava zeros por engano)
 function MenosMais({ qtd, onChange, rotulo }: { qtd: number; onChange: (n: number) => void; rotulo: string }) {
   return (
