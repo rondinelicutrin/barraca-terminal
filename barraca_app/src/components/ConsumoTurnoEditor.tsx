@@ -25,6 +25,34 @@ function avisoSemEstoque(nome: string, it: ShiftItem | undefined, disp: number) 
       : `Só ${disp} unidade(s) de ${nome} disponíveis no estoque do turno (entrada + chegada − o que já saiu).`);
 }
 
+// Lança (+) ou tira (−) consumo só na folha da pessoa (ponto do dia do turno). Usado pelo campo "Consumo func."
+// do Histórico → ✏️ (aba Produtos): quem muda o número ali já mexe no estoque do turno; isto leva a mesma
+// diferença para o ponto da pessoa, para aparecer na folha e no fechamento.
+type StoreCtx = ReturnType<typeof useStore>;
+export function ajustarFolhaConsumo(state: StoreCtx["state"], dispatch: StoreCtx["dispatch"], u: string, date: string, pid: string, delta: number) {
+  const ps = state.pontos.filter((p) => p.employeeUsername === u && p.date === date);
+  if (delta > 0) {
+    const alvo = ps.find((p) => p.consumo.some((c) => c.productId === pid)) ?? ps.find((p) => !ehSoConsumo(p)) ?? ps[0];
+    if (alvo) {
+      const q = alvo.consumo.find((c) => c.productId === pid)?.qty ?? 0;
+      dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: alvo.id, productId: pid, qty: q + delta });
+    } else {
+      dispatch({ type: "ADD_PONTO", p: { id: crypto.randomUUID(), employeeUsername: u, date, entrada: "00:00", saida: "00:00",
+        transporte: 0, refeicao: 0, colegas: [], consumo: [{ productId: pid, qty: delta }] } });
+    }
+    return delta;
+  }
+  let resto = -delta;
+  for (const p of [...ps].reverse()) {
+    const q = p.consumo.find((c) => c.productId === pid)?.qty ?? 0;
+    if (!q || resto <= 0) continue;
+    const tira = Math.min(q, resto);
+    dispatch({ type: "UPDATE_PONTO_CONSUMO", pontoId: p.id, productId: pid, qty: q - tira });
+    resto -= tira;
+  }
+  return delta + resto; // quanto foi tirado de fato (negativo)
+}
+
 // Quantidade com botões − e + (no celular, digitar a quantidade gerava zeros por engano)
 function MenosMais({ qtd, onChange, rotulo }: { qtd: number; onChange: (n: number) => void; rotulo: string }) {
   return (
@@ -73,14 +101,16 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
   const eu = state.currentUser?.username;
 
   // Ajusta a coluna Consumo do turno (estoque) pela diferença
-  const ajustarTurno = (pid: string, delta: number) => {
+  // Ajusta as colunas do turno (estoque): Consumo pela diferença e, quando um descarte vira consumo, Descarte também
+  const ajustarTurno = (pid: string, delta: number, deltaDescarte = 0) => {
     const soma = (it: ShiftItem | undefined): ShiftItem => {
       const base = it ?? { entrada: 0, chegada: 0, sobra: 0, consumo: 0, descarte: 0 };
-      return { ...base, consumo: Math.max(0, (base.consumo || 0) + delta) };
+      return { ...base, consumo: Math.max(0, (base.consumo || 0) + delta), descarte: Math.max(0, (base.descarte || 0) + deltaDescarte) };
     };
     setLocal({ ...local, items: { ...local.items, [pid]: soma(local.items[pid]) } });
     if (isAtivo && state.turnoAtivo) {
-      dispatch({ type: "UPDATE_ITEM", productId: pid, patch: { consumo: soma(state.turnoAtivo.items[pid]).consumo } });
+      const novo = soma(state.turnoAtivo.items[pid]);
+      dispatch({ type: "UPDATE_ITEM", productId: pid, patch: deltaDescarte ? { consumo: novo.consumo, descarte: novo.descarte } : { consumo: novo.consumo } });
     } else {
       const t = state.historico.find((h) => h.id === local.id);
       if (t) dispatch({ type: "EDIT_HIST", id: t.id, turno: { ...t, items: { ...t.items, [pid]: soma(t.items[pid]) } } });
@@ -96,15 +126,24 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
     // usa primeiro esse consumo — ele já saiu do estoque, então não soma de novo na coluna Consumo do turno
     const usaSemDono = delta > 0 ? Math.min(delta, semDono(pid)) : 0;
     const deltaTurno = delta - usaSemDono;
-    if (deltaTurno > 0) {
+    // Descarte que na verdade foi consumo (ex.: bebida lançada como descarte): oferece transformar em consumo da
+    // pessoa — sai do Descarte e entra no Consumo do turno, sem tirar de novo do estoque
+    let usaDescarte = 0;
+    const descAtual = it?.descarte || 0;
+    if (deltaTurno > 0 && descAtual > 0) {
+      const n = Math.min(deltaTurno, descAtual);
+      if (confirm(`${nomeProd(pid)}: há ${descAtual} lançado(s) como DESCARTE neste turno.\n\nTransformar ${n} desse descarte em consumo de ${nome(u)}?\n\nOK = transformar (sai do descarte)\nCancelar = lançar como consumo a mais, mantendo o descarte`)) usaDescarte = n;
+    }
+    const novoNoEstoque = deltaTurno - usaDescarte; // o que ainda vai sair do estoque além do que já tinha saído
+    if (novoNoEstoque > 0) {
       if (naPonto) {
         // Turno aberto: não deixa tirar do estoque mais do que tem
         const disp = disponivelPara(it, "consumo");
-        if (deltaTurno > disp) { avisoSemEstoque(nomeProd(pid), it, disp); return; }
+        if (novoNoEstoque > disp) { avisoSemEstoque(nomeProd(pid), it, disp); return; }
       } else if (local.closedAt && it) {
         // Correção do dono: consumo maior do que o que saiu do estoque deixaria o "vendido" negativo
         const livre = it.entrada + (it.chegada ?? 0) - (it.sobra ?? 0) - (it.consumo || 0) - (it.descarte || 0) - (it.consumoEst || 0);
-        if (deltaTurno > livre && !confirm(`${nomeProd(pid)}: só ${Math.max(0, livre)} unidade(s) saíram do estoque sem consumo/descarte neste turno (entrada + chegada − sobra). Lançar ${deltaTurno} mesmo assim?`)) return;
+        if (novoNoEstoque > livre && !confirm(`${nomeProd(pid)}: só ${Math.max(0, livre)} unidade(s) saíram do estoque sem consumo/descarte neste turno (entrada + chegada − sobra). Lançar ${novoNoEstoque} mesmo assim?`)) return;
       }
     }
     if (delta > 0) {
@@ -127,7 +166,7 @@ export function ConsumoTurnoEditor({ local, setLocal, isAtivo, modo = "correcao"
         resto -= tira;
       }
     }
-    if (deltaTurno !== 0) ajustarTurno(pid, deltaTurno);
+    if (deltaTurno !== 0 || usaDescarte) ajustarTurno(pid, deltaTurno, -usaDescarte);
   };
   const tirarOuDefinir = (u: string, pid: string, q: number) => {
     if (q <= 0) {

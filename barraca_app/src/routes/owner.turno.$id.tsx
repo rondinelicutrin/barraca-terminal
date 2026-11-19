@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
 import { DatePickerBR } from "@/components/ui/date-picker-br";
-import { ConsumoTurnoEditor } from "@/components/ConsumoTurnoEditor";
+import { ConsumoTurnoEditor, ajustarFolhaConsumo } from "@/components/ConsumoTurnoEditor";
 import { EntradasDoTurno, RelatorioSobrasBotoes } from "@/components/FechamentoTurno";
 import { SaidasCaixa } from "@/components/SaidasCaixa";
 import { entradasDoTurno } from "@/lib/relatorio-sobras";
@@ -56,6 +56,42 @@ function EditTurno() {
 
   const updItem = (pid: string, patch: Partial<ShiftItem>) =>
     setLocal({ ...local, items: { ...local.items, [pid]: { ...local.items[pid], ...patch } } });
+
+  // "Consumo func." (aba Produtos): como antes, o dono muda o número aqui — e a diferença já vai para a folha da
+  // pessoa (ponto do dia do turno), aparecendo no consumo dela e no fechamento. Turno com mais de uma pessoa:
+  // pergunta de quem é. Diminuir tira da folha de quem tinha esse consumo.
+  const [chaveConsumo, setChaveConsumo] = useState(0);
+  const mudarConsumoFunc = (pid: string, nomeProd: string, n: number) => {
+    const atualQ = local.items[pid]?.consumo || 0;
+    const novoQ = Math.max(0, Math.round(n));
+    const delta = novoQ - atualQ;
+    if (delta === 0) return;
+    const nomeDe = (u: string) => state.funcionarios.find((f) => f.username === u)?.nome ?? u;
+    const pessoasTurno = [...new Set([local.employee, ...(local.outrosFuncionarios ?? []), ...(orig?.consumidores ?? [])])];
+    if (delta > 0) {
+      let u = pessoasTurno[0];
+      if (pessoasTurno.length > 1) {
+        const r = prompt(`De quem é o consumo de ${delta} ${nomeProd}?\n\n${pessoasTurno.map((x, i) => `${i + 1} - ${nomeDe(x)}`).join("\n")}\n\nDigite o número:`, "1");
+        const i = r == null ? NaN : Number(r.trim()) - 1;
+        if (!(i >= 0 && i < pessoasTurno.length)) { setChaveConsumo((k) => k + 1); return; }
+        u = pessoasTurno[i];
+      }
+      ajustarFolhaConsumo(state, dispatch, u, local.date, pid, delta);
+    } else {
+      let resto = -delta;
+      for (const u of pessoasTurno) {
+        if (resto <= 0) break;
+        resto += ajustarFolhaConsumo(state, dispatch, u, local.date, pid, -resto);
+      }
+    }
+    // Estoque do turno: grava já (como o bloco de consumo), além de deixar no formulário para o "Salvar alterações"
+    updItem(pid, { consumo: novoQ });
+    if (isAtivo && state.turnoAtivo) dispatch({ type: "UPDATE_ITEM", productId: pid, patch: { consumo: novoQ } });
+    else {
+      const t = state.historico.find((h) => h.id === local.id);
+      if (t) dispatch({ type: "EDIT_HIST", id: t.id, turno: { ...t, items: { ...t.items, [pid]: { ...t.items[pid], consumo: novoQ } } } });
+    }
+  };
   const updCaixa = (patch: Partial<Turno["caixa"]>) =>
     setLocal({ ...local, caixa: { ...local.caixa, ...patch } });
   const updMaq = (which: "maq1" | "maq2", patch: any) =>
@@ -163,8 +199,8 @@ function EditTurno() {
       {tab === "produtos" ? (
         <div className="p-3 space-y-2">
           <p className="text-[11px] text-muted-foreground">
-            Consumo de funcionário: lance no bloco "🍽 Consumo dos funcionários do turno" (acima) — ele vai para a folha da pessoa
-            e para a coluna Consumo do turno juntos.
+            Consumo func.: ao mudar o número, a diferença já vai para a folha da pessoa do turno (e aparece no fechamento).
+            Ex.: descarte lançado por engano → diminua o Descarte e aumente o Consumo func.
           </p>
           {products.map((p) => {
             const it = local.items[p.id];
@@ -201,12 +237,11 @@ function EditTurno() {
                 <div className="grid grid-cols-2 gap-1.5 mt-1.5">
                   <label className="flex flex-col">
                     <span className="text-[10px] text-muted-foreground uppercase">Consumo func.</span>
-                    {/* Só leitura: consumo é lançado no bloco "🍽 Consumo dos funcionários" (vai junto para a folha da pessoa).
-                        Mudar aqui alterava só o estoque do turno e o consumo ficava sem dono na folha. */}
-                    <BufferedNumberInput
-                      value={it.consumo} decimal={false} className="text-center opacity-60" readOnly
-                      aria-label={`Consumo func. de ${p.name} (lançado no bloco de consumo)`}
-                      onChange={() => {}}
+                    {/* Mudar aqui leva a diferença para a folha da pessoa do turno (pergunta de quem, se houver mais de uma) */}
+                    <BufferedNumberInput key={`${p.id}-${chaveConsumo}`}
+                      value={it.consumo} decimal={false} className="text-center"
+                      aria-label={`Consumo func. de ${p.name}`}
+                      onChange={() => {}} onBlur={(n) => mudarConsumoFunc(p.id, p.name, n)}
                     />
                   </label>
                   <label className="flex flex-col">
