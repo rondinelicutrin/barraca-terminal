@@ -98,7 +98,7 @@ function Historico() {
             </p>
             {resumos.map((r) => (
               <div key={r.rotulo} className="flex items-baseline justify-between gap-2 text-xs">
-                <span>{r.rotulo} <span className="text-muted-foreground">({r.turnos} turnos · sobras {BRL(r.sobras)} · faltas {BRL(-r.faltas)})</span></span>
+                <span>{r.rotulo} <span className="text-muted-foreground">({r.turnos} {r.turnos === 1 ? "turno" : "turnos"} · sobras {BRL(r.sobras)} · faltas {BRL(-r.faltas)})</span></span>
                 <span className={`mono font-semibold text-sm shrink-0 ${cor(r.real)}`}>{sinal(r.real)}</span>
               </div>
             ))}
