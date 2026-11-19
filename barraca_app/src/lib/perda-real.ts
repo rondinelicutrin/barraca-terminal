@@ -4,7 +4,7 @@
 // e o total real (soma das diferenças) por período.
 import { esperadoTurno, arrecadadoTurno, type Turno } from "@/lib/store";
 import type { Product } from "@/lib/products";
-import { inicioSemana, fimSemana, semanaPassada } from "@/lib/folha";
+import { inicioSemana, fimSemana, semanaPassada, somarDias } from "@/lib/folha";
 import { todayISO } from "@/lib/format";
 
 const ORDEM: Record<string, number> = { manha: 0, tarde: 1, noite: 2 };
@@ -43,7 +43,10 @@ export function resumoPerdaReal(historico: Turno[], products: Product[], de: str
 
 export function periodosPerdaReal(hoje = todayISO()) {
   const seg = inicioSemana(hoje), passada = semanaPassada(hoje);
+  const ontem = somarDias(hoje, -1);
   return [
+    { rotulo: "Hoje", de: hoje, ate: hoje },
+    { rotulo: "Ontem", de: ontem, ate: ontem },
     { rotulo: "Esta semana", de: seg, ate: fimSemana(seg) },
     { rotulo: "Semana passada", de: passada, ate: fimSemana(passada) },
     { rotulo: "Este mês", de: hoje.slice(0, 8) + "01", ate: hoje.slice(0, 8) + "31" },
