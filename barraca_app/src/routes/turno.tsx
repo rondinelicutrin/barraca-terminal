@@ -117,8 +117,17 @@ function StartShift() {
     const aberto = await buscarTurnoAberto();
     const recente = aberto ? undefined : await buscarHistoricoRecente();
     setAbrindo(false);
-    if (recente && pendentesDoTipo("turno").length === 0) {
-      dispatch({ type: "ATUALIZAR_HISTORICO_RECENTE", desde: recente.desde, historico: recente.historico });
+    // Sem conferir o banco, o turno abriria com o que está neste celular — que pode não ter o fechamento
+    // anterior (ex.: a manhã herdou a tarde porque a noite ainda não tinha chegado). Então não abre.
+    if (aberto === undefined || (!aberto && !recente)) {
+      alert("SEM INTERNET: não foi possível conferir o turno anterior no sistema.\n\nO caixa, as maquininhas e as sobras vêm do fechamento anterior. Conecte a internet e toque em \"Abrir turno\" de novo.");
+      return;
+    }
+    // Os fechamentos do banco valem para a abertura (e os fechados aqui que ainda esperam a internet também)
+    if (recente) {
+      const pendentes = pendentesDoTipo<any>("turno").map((d) => (d && d.turno ? d.turno : d) as Turno)
+        .filter((t) => t.closedAt && !recente.historico.some((h) => h.id === t.id));
+      dispatch({ type: "ATUALIZAR_HISTORICO_RECENTE", desde: recente.desde, historico: [...pendentes, ...recente.historico] });
     }
     if (aberto) {
       if (turnoDeOutroFuncionario(state, aberto)) {
@@ -153,6 +162,15 @@ function StartShift() {
     const ordem: Record<string, number> = { manha: 0, tarde: 1, noite: 2 };
     const chave = (d: string, sh: string) => `${d}#${ordem[sh] ?? 9}`;
     const sequenciaOk = !!ult && chave(ult.date, ult.shift) < chave(date, shift) && ult.date >= somarDias(date, -1);
+    // Manhã sem a NOITE anterior fechada no sistema: pular a tarde é normal (dias de 12h), pular a noite não.
+    // As maquininhas da manhã partem do "após 00:00" da noite; herdar da tarde dá um caixa impossível de fechar.
+    if (shift === "manha" && ult && ult.date === somarDias(date, -1) && ult.shift !== "noite") {
+      const msg = `A NOITE de ${ant.date.split("-").reverse().join("/")} ainda não está FECHADA no sistema.\n\n` +
+        `O caixa, as maquininhas (valor após 00:00) e as sobras da manhã vêm dela. Peça para quem fechou a noite abrir o app ` +
+        `com internet (o fechamento pode estar esperando para ser enviado) e tente de novo.`;
+      if (state.currentUser?.role !== "owner") { alert(msg); return; }
+      if (!confirm(msg + `\n\nVocê é administrador: abrir mesmo assim, herdando do turno ${rot(ult.shift)} de ${ult.date.split("-").reverse().join("/")}?`)) return;
+    }
     if (!temAnterior && ult && ehTurnoRecente(date) && !sequenciaOk) {
       const quando = ult.closedAt ? new Date(ult.closedAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
       if (!confirm(
