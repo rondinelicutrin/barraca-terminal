@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { useStore, veResultadoCaixa, turnoFechadoNoBanco, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, type Turno, type TaxasMaquininha } from "@/lib/store";
+import { useEffect, useMemo, useState } from "react";
+import { useStore, veResultadoCaixa, turnoFechadoNoBanco, getAllProducts, esperadoTurno, arrecadadoTurno, nomeMaquina, ehSoConsumo, sobraOverflow, maqAbaixoDaBase, valorComparadoMaq, buscarHistoricoRecente, turnoAnteriorDe, mudancasDeHeranca, type Turno, type TaxasMaquininha } from "@/lib/store";
 import { BRL, shiftLabel } from "@/lib/format";
 import { ConsumoTurnoEditor, DescarteTurnoEditor } from "@/components/ConsumoTurnoEditor";
 import { TopBar } from "@/components/Shell";
@@ -258,7 +258,42 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
     setPerguntando(true);
   };
 
-  const confirmarFechamento = () => {
+  const [conferindoAnterior, setConferindoAnterior] = useState(false);
+  const confirmarFechamento = async () => {
+    // Antes de fechar: o turno anterior no SISTEMA (pode ter sido fechado ou corrigido depois que este abriu)
+    // precisa bater com o que este turno herdou — caixa anterior, moedas, maquininhas e entradas. Senão o
+    // resultado sai errado (ex.: maquininhas herdadas da tarde em vez do "após 00:00" da noite).
+    setConferindoAnterior(true);
+    const recente = await buscarHistoricoRecente(3);
+    setConferindoAnterior(false);
+    if (!recente) {
+      alert("SEM INTERNET: não foi possível conferir o turno anterior no sistema nem enviar o fechamento.\n\nConecte a internet e toque em \"Sim, fechar turno\" de novo.");
+      return;
+    }
+    const anterior = turnoAnteriorDe({ ...state, historico: recente.historico }, t);
+    if (anterior) {
+      const m = mudancasDeHeranca(anterior, t, getAllProducts(state));
+      const linhas = [
+        ...(m.caixa ? [`• Dinheiro do caixa anterior: ${BRL(m.caixa.de)} → ${BRL(m.caixa.para)}`] : []),
+        ...(m.moedas ? [`• Moedas inicial: ${BRL(m.moedas.de)} → ${BRL(m.moedas.para)}`] : []),
+        ...m.bases.map((x) => `• ${nomeMaquina(state.taxasMaquininha, x.m)} (valor do turno anterior): ${BRL(x.de)} → ${BRL(x.para)}`),
+        ...m.entradas.slice(0, 8).map((x) => `• Entrada de ${x.nome}: ${x.de} → ${x.para}`),
+        ...(m.entradas.length > 8 ? [`• e mais ${m.entradas.length - 8} produto(s)`] : []),
+      ];
+      if (linhas.length > 0) {
+        dispatch({
+          type: "AJUSTAR_HERANCA", id: t.id,
+          ...(m.caixa ? { caixaFimPrev: m.caixa.para } : {}),
+          ...(m.moedas ? { moedasInicial: m.moedas.para } : {}),
+          ...(m.bases.length ? { bases: Object.fromEntries(m.bases.map((x) => [x.m, x.para])) } : {}),
+          ...(m.entradas.length ? { entradas: Object.fromEntries(m.entradas.map((x) => [x.id, x.para])) } : {}),
+        });
+        setPerguntando(false);
+        alert(`O TURNO ANTERIOR (${shiftLabel(anterior.shift).replace(/^[^\p{L}]+/u, "")} de ${anterior.date.split("-").reverse().join("/")}) ESTAVA DIFERENTE NO SISTEMA.\n\n` +
+          `Os valores herdados foram corrigidos:\n${linhas.join("\n")}\n\nConfira o caixa, as maquininhas e as sobras e toque em "Fechar turno" de novo.`);
+        return;
+      }
+    }
     setPerguntando(false);
     dispatch({ type: "CLOSE_SHIFT" });
     onClosed({ ...t, closedAt: Date.now(), fechadoPor: state.currentUser?.username });
@@ -343,7 +378,7 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={() => setPerguntando(false)}>Voltar</Button>
-              <Button onClick={confirmarFechamento}>Sim, fechar turno</Button>
+              <Button onClick={confirmarFechamento} disabled={conferindoAnterior}>{conferindoAnterior ? "Conferindo…" : "Sim, fechar turno"}</Button>
             </div>
           </div>
         </DialogContent>
@@ -358,8 +393,28 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
 }
 
 // ── Tela pós-fechamento: acesso rápido ao relatório de sobras dos pastéis ──
+// Confere no sistema se o fechamento chegou (o envio pode estar esperando a internet). Enquanto não chega,
+// tenta enviar de novo a cada 5 segundos: o turno seguinte só pode abrir com este fechamento no sistema.
+function useFechamentoNoSistema(id: string) {
+  const [noSistema, setNoSistema] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    let vivo = true, timer: ReturnType<typeof setTimeout> | undefined;
+    const conferir = async () => {
+      await processar();
+      const ok = await turnoFechadoNoBanco(id);
+      if (!vivo) return;
+      setNoSistema(ok === true ? true : ok === false ? false : undefined);
+      if (ok !== true) timer = setTimeout(conferir, 5000);
+    };
+    void conferir();
+    return () => { vivo = false; if (timer) clearTimeout(timer); };
+  }, [id]);
+  return noSistema;
+}
+
 export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar: () => void }) {
   const { state } = useStore();
+  const noSistema = useFechamentoNoSistema(turno.id);
   const products = getAllProducts(state).filter((p) => p.category === "pastel");
   const linhas = products
     .map((p) => ({ p, item: turno.items[p.id] }))
@@ -385,6 +440,20 @@ export function TurnoFechadoScreen({ turno, onVoltar }: { turno: Turno; onVoltar
             {rel.colegas.length > 0 ? ` · Colegas: ${rel.colegas.join(", ")}` : ""}
           </div>
         </div>
+
+        {noSistema === true ? (
+          <div className="text-xs text-success text-center font-semibold" id="fechamento-no-sistema">✅ Fechamento recebido pelo sistema. O próximo turno já pode abrir.</div>
+        ) : (
+          <div role="alert" id="fechamento-pendente" className="bg-destructive/10 border-2 border-destructive rounded-xl p-3 space-y-1">
+            <div className="text-sm font-bold text-destructive">
+              {noSistema === undefined ? "⏳ Enviando o fechamento para o sistema…" : "⚠️ O FECHAMENTO AINDA NÃO CHEGOU AO SISTEMA"}
+            </div>
+            <p className="text-xs">
+              NÃO FECHE O APP. Confira a internet: o envio é tentado de novo sozinho. O próximo turno só consegue abrir depois que
+              este fechamento chegar ao sistema.
+            </p>
+          </div>
+        )}
 
         {/* Funcionário: só a falta é sinalizada, sem valores (caixa certo ou com sobra não mostram nada) */}
         {!veResultadoCaixa(state.currentUser) && temFaltaNoCaixa(rel.diferenca) && (
