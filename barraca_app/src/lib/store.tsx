@@ -2149,6 +2149,61 @@ export async function turnoFechadoNoBanco(id: string): Promise<boolean | undefin
   return !!data?.[0]?.closed_at;
 }
 
+// ---- Turno antigo aberto por engano (ex.: reaberto por um envio velho de um celular) ----
+const ORDEM_PER: Record<string, number> = { manha: 0, tarde: 1, noite: 2 };
+const chaveTurno = (t: { date: string; shift: string }) => `${t.date}#${ORDEM_PER[t.shift] ?? 9}`;
+
+export interface TurnoAbertoPorEngano { turno: Turno; seguinte?: Turno; fecharEm: number; sobras: Record<string, number> }
+
+// Todos os turnos ABERTOS no banco. Um deles está "aberto por engano" quando já existe um turno depois dele
+// FECHADO, ou quando há outro turno aberto mais novo. Para restaurar: fecha com um horário antes da abertura do
+// turno seguinte (a herança continua vindo do turno certo) e as sobras voltam a ser as entradas do turno seguinte.
+// undefined = não deu para consultar.
+export async function buscarTurnosAbertosPorEngano(historico: Turno[]): Promise<TurnoAbertoPorEngano[] | undefined> {
+  const { data, error } = await supabase.from("turnos").select("*").is("closed_at", null);
+  if (error) return undefined;
+  const abertos = (data ?? []).map((r: any) => turnoFromRow(r, {}));
+  const out: TurnoAbertoPorEngano[] = [];
+  for (const t of abertos) {
+    const fechadosDepois = historico.filter((h) => h.closedAt && h.id !== t.id && chaveTurno(h) > chaveTurno(t))
+      .sort((a, b) => chaveTurno(a).localeCompare(chaveTurno(b)));
+    const abertoMaisNovo = abertos.some((o) => o.id !== t.id && chaveTurno(o) > chaveTurno(t));
+    if (fechadosDepois.length === 0 && !abertoMaisNovo) continue;
+    const { data: itens, error: errI } = await supabase.from("turno_itens").select("*").eq("turno_id", t.id);
+    if (errI) return undefined;
+    const items: Record<string, ShiftItem> = {};
+    for (const ir of itens ?? []) items[ir.product_id] = shiftItemFromRow(ir);
+    const seguinte = fechadosDepois[0];
+    const proximoAberto = abertos.filter((o) => o.id !== t.id && chaveTurno(o) > chaveTurno(t)).sort((a, b) => chaveTurno(a).localeCompare(chaveTurno(b)))[0];
+    const refs = [seguinte, proximoAberto].filter(Boolean) as Turno[];
+    const abreDepois = refs.length ? Math.min(...refs.map((r) => r.createdAt)) : t.createdAt + 12 * 3600000;
+    const sobras: Record<string, number> = {};
+    if (seguinte) for (const [pid, it] of Object.entries(seguinte.items)) if (items[pid] && it.entrada != null) sobras[pid] = it.entrada;
+    out.push({ turno: { ...t, items }, seguinte, fecharEm: Math.max(t.createdAt + 60000, abreDepois - 60000), sobras });
+  }
+  return out.sort((a, b) => chaveTurno(a.turno).localeCompare(chaveTurno(b.turno)));
+}
+
+// Restaura o fechamento de um turno aberto por engano (só dono/administrador). O caixa não muda.
+export async function restaurarFechamento(r: TurnoAbertoPorEngano): Promise<string | null> {
+  try {
+    const { error } = await supabase.from("turnos").update({ closed_at: new Date(r.fecharEm).toISOString() }).eq("id", r.turno.id);
+    if (error) throw error;
+    for (const [pid, sobra] of Object.entries(r.sobras)) {
+      const { error: e2 } = await supabase.from("turno_itens").update({ sobra }).eq("turno_id", r.turno.id).eq("product_id", pid);
+      if (e2) throw e2;
+    }
+    descartarPendentes([`turno:${r.turno.id}`]);
+    return null;
+  } catch (e: any) {
+    return String(e?.message ?? e);
+  }
+}
+
+export async function buscarHistoricoDesde(desde: string): Promise<Turno[] | undefined> {
+  try { return await buscarHistorico(desde); } catch { return undefined; }
+}
+
 export async function buscarTurnoAberto(): Promise<Turno | null | undefined> {
   const { data, error } = await supabase.from("turnos").select("*").is("closed_at", null)
     .order("created_at", { ascending: false }).limit(1);
