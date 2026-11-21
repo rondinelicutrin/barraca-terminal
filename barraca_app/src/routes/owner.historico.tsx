@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Fragment, useMemo } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Shell, TopBar, BottomNav } from "@/components/Shell";
-import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, statusTurno, ordenarTurnos, veResultadoCaixa } from "@/lib/store";
+import { useStore, getAllProducts, esperadoTurno, arrecadadoTurno, statusTurno, ordenarTurnos, veResultadoCaixa,
+  buscarTurnosAbertosPorEngano, restaurarFechamento, buscarTurnoAberto, buscarHistoricoDesde, type TurnoAbertoPorEngano } from "@/lib/store";
 import { BRL, formatDateBR, shiftLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { gerarRelatorioPdf } from "@/lib/pdf";
@@ -25,6 +26,30 @@ function Historico() {
   const PER: Record<string, string> = { manha: "Manhã", tarde: "Tarde", noite: "Noite" };
   const rot = (t: { date: string; shift: string }) => `${formatDateBR(t.date).slice(0, 5)} ${PER[t.shift] ?? t.shift}`;
   const sinal = (v: number) => `${v > 0.005 ? "+" : ""}${BRL(v)}`;
+
+  // Turno antigo aberto por engano (ex.: reaberto no banco por um envio velho de um celular): aviso e restauração
+  const [presos, setPresos] = useState<TurnoAbertoPorEngano[]>([]);
+  const [restaurando, setRestaurando] = useState<string | null>(null);
+  const conferirPresos = async () => { const r = await buscarTurnosAbertosPorEngano(state.historico); if (r) setPresos(r); };
+  useEffect(() => { if (veReal) void conferirPresos(); }, [veReal, state.historico.length, state.turnoAtivo?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hora = (ms: number) => new Date(ms).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const restaurar = async (r: TurnoAbertoPorEngano) => {
+    const qtd = Object.keys(r.sobras).length;
+    if (!confirm(`Restaurar o fechamento de ${rot(r.turno)} (${r.turno.employee})?\n\n` +
+      `• Fecha o turno com horário ${hora(r.fecharEm)}${r.seguinte ? `, antes da abertura de ${rot(r.seguinte)}` : ""} (a herança dos próximos turnos continua certa)\n` +
+      (r.seguinte ? `• Sobras de ${qtd} produto(s) voltam a ser as entradas de ${rot(r.seguinte)}\n` : "• Sem turno seguinte fechado: as sobras ficam como estão\n") +
+      `• O caixa não muda — confira depois no ✏️ deste turno`)) return;
+    setRestaurando(r.turno.id);
+    const erro = await restaurarFechamento(r);
+    setRestaurando(null);
+    if (erro) { alert(`Não foi possível restaurar (confira a internet): ${erro}`); return; }
+    const aberto = await buscarTurnoAberto();
+    if (aberto !== undefined) dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: aberto });
+    const hist = await buscarHistoricoDesde(r.turno.date);
+    if (hist) dispatch({ type: "ATUALIZAR_HISTORICO_RECENTE", desde: r.turno.date, historico: hist });
+    alert(`Fechamento de ${rot(r.turno)} restaurado. Confira o caixa dele no ✏️.`);
+    await conferirPresos();
+  };
   const cor = (v: number) => (Math.abs(v) < 0.5 ? "text-success" : v > 0 ? "text-warning" : "text-destructive");
 
   const excluirTurno = (id: string, rotulo: string, emAndamento: boolean) => {
@@ -86,6 +111,20 @@ function Historico() {
         <Button variant="secondary" onClick={baixarCsvArquivo}>📊 CSV</Button>
       </div>
       <div className="p-3 pt-0 space-y-2">
+        {veReal && presos.map((r) => (
+          <div key={r.turno.id} role="alert" className="bg-destructive/10 border-2 border-destructive rounded-lg p-3 space-y-1.5" id="turno-preso">
+            <div className="text-sm font-bold text-destructive">⚠ Turno antigo aberto por engano: {rot(r.turno)}</div>
+            <p className="text-xs">
+              {r.turno.employee} · aberto desde {hora(r.turno.createdAt)}.{" "}
+              {r.seguinte ? `${rot(r.seguinte)} já foi fechado depois dele` : "há outro turno aberto mais novo"} — este turno deveria estar fechado
+              (pode ter sido reaberto por um envio antigo de um celular). Enquanto estiver aberto, ele pode aparecer no celular de quem o abriu.
+            </p>
+            <Button className="w-full" variant="destructive" disabled={restaurando === r.turno.id} onClick={() => restaurar(r)}>
+              {restaurando === r.turno.id ? "Restaurando…" : "Restaurar fechamento"}
+            </Button>
+            <div className="text-[10px] text-muted-foreground">🔒 Visível só para dono e administrador · não use o 🗑 neste turno (apaga o fechamento inteiro)</div>
+          </div>
+        ))}
         {veReal && state.historico.length > 0 && (
           <div className="bg-card border border-primary/40 rounded-lg p-3 space-y-1.5" id="perda-real">
             <div className="flex items-center justify-between gap-2">
