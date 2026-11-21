@@ -146,6 +146,14 @@ export async function processar(): Promise<void> {
 export const pendentesDoTipo = <T,>(tipo: string): T[] => fila.filter((p) => p.tipo === tipo).map((p) => p.dados as T);
 export const temPendencias = () => fila.length > 0;
 
+// Tira da fila envios que não devem mais sair (ex.: foto antiga de um turno que já está FECHADO no sistema —
+// se fosse enviada, reabriria o turno com os dados velhos)
+export function descartarPendentes(chaves: string[]) {
+  const antes = fila.length;
+  fila = fila.filter((p) => !p.chave || !chaves.includes(p.chave));
+  if (fila.length !== antes) { salvar(); avisar(); }
+}
+
 export function limparRecusados() {
   estado = { ...estado, recusados: [] };
   avisar();

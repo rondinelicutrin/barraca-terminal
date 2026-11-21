@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useReducer, useRef, type ReactNod
 import { DEFAULT_PRODUCTS, type Product } from "./products";
 import { todayISO } from "./format";
 import { supabase } from "./supabase";
-import { enviar, processar, registrarExecutor, pendentesDoTipo } from "./fila";
+import { enviar, processar, registrarExecutor, pendentesDoTipo, descartarPendentes } from "./fila";
 
 export type ShiftKey = "manha" | "tarde" | "noite";
 
@@ -575,6 +575,17 @@ const COLUNA_ITEM: Record<string, string> = {
 
 async function sincronizarTurnoCompleto(t: Turno, itens: ItensAlterados = "todos") {
   try {
+    // Foto de turno ABERTO de um turno que no sistema já está FECHADO (ex.: envio antigo parado num celular):
+    // não envia — senão reabriria o fechamento com os dados velhos (caso da noite de 18/11 da Jaqueline)
+    if (!t.closedAt) {
+      const { data: noBanco, error: errConf } = await supabase.from("turnos").select("closed_at").eq("id", t.id).limit(1);
+      if (errConf) throw errConf;
+      if (noBanco?.[0]?.closed_at) {
+        // eslint-disable-next-line no-console
+        console.warn("Envio antigo de turno já fechado no sistema foi ignorado:", t.date, t.shift);
+        return;
+      }
+    }
     let { error: errTurno } = await supabase.from("turnos").upsert(turnoToRow(t), { onConflict: "id" });
     if (errTurno && t.fechadoPor && ehColunaFaltando(errTurno)) {
       // Banco ainda sem a coluna "fechado_por": salva o turno sem ela (nada se perde do fechamento)
@@ -2275,6 +2286,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (t.closedAt) {
             historico = [t, ...historico.filter((h) => h.id !== t.id)];
             if (turnoAtivo?.id === t.id) turnoAtivo = null;
+          } else if (historico.some((h) => h.id === t.id && h.closedAt)) {
+            // Já está FECHADO no sistema: é uma foto velha parada neste celular — descarta (não reabre)
+            descartarPendentes([`turno:${t.id}`]);
           } else if (!turnoAtivo || turnoAtivo.id === t.id) {
             turnoAtivo = t;
           }
@@ -2385,7 +2399,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     !!turnoSyncTimerRef.current || turnoSujoRef.current || pendentesDoTipo("turno").length > 0 ||
     (itensAlteradosRef.current === "todos" || Object.keys(itensAlteradosRef.current).length > 0);
   const atualizarTurnoAberto = async () => {
-    if (!turnosCarregadosRef.current || temAlteracaoLocalDoTurno()) return;
+    if (!turnosCarregadosRef.current) return;
+    // Turno aberto neste celular que no sistema já foi FECHADO (em outro aparelho, ou um turno antigo que ficou
+    // preso aqui): sai da tela e os envios dele são descartados — não pode reabrir nem receber lançamentos
+    const local = stateRef.current.turnoAtivo;
+    if (local) {
+      const fechado = await turnoFechadoNoBanco(local.id);
+      if (fechado === true && stateRef.current.turnoAtivo?.id === local.id) {
+        descartarPendentes([`turno:${local.id}`]);
+        cancelarSincronizacaoTurno();
+        turnoSujoRef.current = false;
+        itensAlteradosRef.current = {};
+        const doBanco = await buscarTurnoAberto();
+        dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: doBanco ?? null });
+        const recente = await buscarHistoricoRecente();
+        if (recente) dispatch({ type: "ATUALIZAR_HISTORICO_RECENTE", desde: recente.desde, historico: recente.historico });
+        return;
+      }
+    }
+    if (temAlteracaoLocalDoTurno()) return;
     const doBanco = await buscarTurnoAberto();
     if (doBanco === undefined || temAlteracaoLocalDoTurno()) return; // sem internet, ou digitou nesse meio-tempo
     const atual = stateRef.current.turnoAtivo;
