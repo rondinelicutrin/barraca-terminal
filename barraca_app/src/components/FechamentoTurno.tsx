@@ -6,7 +6,7 @@ import { ConsumoTurnoEditor, DescarteTurnoEditor } from "@/components/ConsumoTur
 import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
-import { processar } from "@/lib/fila";
+import { processar, descartarPendentes } from "@/lib/fila";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
 import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA, consumoPorPessoaDoTurno } from "@/lib/fechamento-impresso";
@@ -384,7 +384,18 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
         </DialogContent>
       </Dialog>
       <button
-        onClick={() => confirm("Descartar este turno sem salvar?") && dispatch({ type: "DISCARD_SHIFT" })}
+        onClick={async () => {
+          if (!confirm("Descartar este turno sem salvar?")) return;
+          const fechado = await turnoFechadoNoBanco(t.id);
+          if (fechado === true) {
+            descartarPendentes([`turno:${t.id}`]);
+            dispatch({ type: "SET_TURNO_ATIVO_FROM_DB", turnoAtivo: null });
+            alert("Este turno já está FECHADO no sistema: ele saiu só deste celular. O fechamento verdadeiro continua guardado.");
+            return;
+          }
+          if (fechado === undefined) { alert("SEM INTERNET: conecte para descartar o turno."); return; }
+          dispatch({ type: "DISCARD_SHIFT" });
+        }}
         className="w-full text-xs text-muted-foreground py-2 hover:text-destructive">
         Descartar
       </button>
