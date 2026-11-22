@@ -7,6 +7,8 @@ import { TopBar } from "@/components/Shell";
 import { EXCLUIR_DO_TOTAL_PASTEL } from "@/lib/products";
 import { Button } from "@/components/ui/button";
 import { processar, descartarPendentes } from "@/lib/fila";
+import { LIMITE_RECONTAGEM, vendasForaDoNormal, produtosParaRecontar, diferencaDoTurno, jaRecontado } from "@/lib/conferencia";
+import { BufferedNumberInput } from "@/components/ui/buffered-number-input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { montarRelatorioSobras, type GrupoEntradas } from "@/lib/relatorio-sobras";
 import { montarFechamentoImpresso, baixarFechamentoPdf, baixarFechamentoCsv, temFaltaNoCaixa, ALERTA_FALTA, consumoPorPessoaDoTurno } from "@/lib/fechamento-impresso";
@@ -255,10 +257,47 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       return;
     }
     // Última pergunta (Sim/Não): consumo e descarte esquecidos mudam o resultado do fechamento
+    // A) Caixa não bate (diferença acima de R$ 30): antes de fechar, pede para recontar os produtos mais
+    // suspeitos. Às cegas: não mostra o valor da diferença, só quais produtos conferir.
+    if (!jaRecontado(t) && Math.abs(diferencaDoTurno(state, t)) > LIMITE_RECONTAGEM) {
+      const pids = produtosParaRecontar(state, t);
+      if (pids.length > 0) {
+        setRecontagem(Object.fromEntries(pids.map((pid) => [pid, { chegada: t.items[pid]?.chegada ?? 0, sobra: null }])));
+        return;
+      }
+    }
     setPerguntando(true);
   };
 
   const [conferindoAnterior, setConferindoAnterior] = useState(false);
+  // Recontagem obrigatória: produto → chegada (pode corrigir) e sobra (contada de novo)
+  const [recontagem, setRecontagem] = useState<Record<string, { chegada: number; sobra: number | null }> | null>(null);
+  const foraDoNormal = vendasForaDoNormal(state, t);
+  const confirmarRecontagem = () => {
+    if (!recontagem) return;
+    const faltando = Object.entries(recontagem).filter(([, v]) => v.sobra == null).map(([pid]) => products.find((p) => p.id === pid)?.name ?? pid);
+    if (faltando.length > 0) { alert(`Conte de novo e digite a SOBRA de: ${faltando.join(", ")}.`); return; }
+    const novos = { ...t.items };
+    for (const [pid, v] of Object.entries(recontagem)) {
+      const it = t.items[pid];
+      if (!it) continue;
+      const disp = it.entrada + v.chegada - (it.consumo || 0) - (it.descarte || 0) - (it.consumoEst || 0);
+      if ((v.sobra as number) > disp) {
+        alert(`${products.find((p) => p.id === pid)?.name}: a sobra (${v.sobra}) não pode ser maior que entrada + chegada − consumo/descarte (${disp}). Confira a chegada e a contagem.`);
+        return;
+      }
+      novos[pid] = { ...it, chegada: v.chegada, sobra: v.sobra };
+    }
+    for (const [pid, v] of Object.entries(recontagem)) {
+      if (t.items[pid]) dispatch({ type: "UPDATE_ITEM", productId: pid, patch: { chegada: v.chegada, sobra: v.sobra } });
+    }
+    dispatch({ type: "UPDATE_CAIXA", patch: { camposPreenchidos: { ...t.caixa.camposPreenchidos, recontagem: true } } });
+    setRecontagem(null);
+    const aindaNaoBate = Math.abs(diferencaDoTurno(state, { ...t, items: novos })) > LIMITE_RECONTAGEM;
+    alert(aindaNaoBate
+      ? "Recontagem registrada, mas ainda não está batendo.\n\nConfira também o dinheiro, as moedas, as maquininhas, o Pix e as chegadas. Se estiver tudo certo, toque em \"Fechar turno\" de novo (o fechamento fica marcado como recontado)."
+      : "Recontagem registrada. Agora está batendo — toque em \"Fechar turno\" de novo.");
+  };
   const confirmarFechamento = async () => {
     // Antes de fechar: o turno anterior no SISTEMA (pode ter sido fechado ou corrigido depois que este abriu)
     // precisa bater com o que este turno herdou — caixa anterior, moedas, maquininhas e entradas. Senão o
@@ -357,6 +396,39 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       )}
 
       <Button className="w-full" onClick={closeShift}>Fechar turno</Button>
+      <Dialog open={recontagem != null} onOpenChange={(v) => { if (!v) setRecontagem(null); }}>
+        <DialogContent className="max-w-[440px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Conte de novo antes de fechar</DialogTitle></DialogHeader>
+          <div className="space-y-3 text-sm" id="recontagem">
+            <p className="text-xs">
+              <b>Algo não está batendo.</b> Pare, conte de novo <b>agora</b> estes produtos e digite a <b>SOBRA</b> que você contou.
+              Confira também a <b>CHEGADA</b> (o que chegou de verdade neste turno).
+            </p>
+            {recontagem && Object.entries(recontagem).map(([pid, v]) => {
+              const prod = products.find((p) => p.id === pid);
+              const fora = foraDoNormal.find((f) => f.pid === pid);
+              return (
+                <div key={pid} className="bg-background border border-border rounded-lg p-2 space-y-1.5">
+                  <div className="text-xs font-semibold">{prod?.name ?? pid}{fora && <span className="text-warning font-normal"> · vendeu {fora.vendido} (normal {fora.normalDe === fora.normalAte ? fora.normalAte : `${fora.normalDe} a ${fora.normalAte}`})</span>}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex flex-col text-[10px] text-muted-foreground uppercase">Chegada
+                      <BufferedNumberInput value={v.chegada} decimal={prod?.decimal} className="h-9 text-center" aria-label={`Chegada de ${prod?.name} (recontagem)`}
+                        onChange={(n) => setRecontagem({ ...recontagem, [pid]: { ...v, chegada: n } })} />
+                    </label>
+                    <label className="flex flex-col text-[10px] text-muted-foreground uppercase">Sobra (contagem nova)
+                      <input type="text" inputMode={prod?.decimal ? "decimal" : "numeric"} aria-label={`Sobra de ${prod?.name} (recontagem)`}
+                        className="h-9 rounded-md px-2 text-sm mono text-center border bg-input border-border"
+                        value={v.sobra == null ? "" : String(v.sobra).replace(".", ",")} placeholder="contar"
+                        onChange={(e) => { const raw = e.target.value.trim(); const n = raw === "" ? null : Number(raw.replace(",", ".")); setRecontagem({ ...recontagem, [pid]: { ...v, sobra: n != null && Number.isFinite(n) ? n : null } }); }} />
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+            <Button className="w-full" onClick={confirmarRecontagem}>Confirmar recontagem</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={perguntando} onOpenChange={setPerguntando}>
         <DialogContent className="max-w-[440px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Antes de fechar o turno</DialogTitle></DialogHeader>
@@ -368,6 +440,14 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
               <div className="bg-background border border-border rounded-lg p-2.5 space-y-1 text-xs">
                 {consumoBarraca.length > 0 && listaLancados("Consumo da barraca", consumoBarraca, "")}
                 {(t.saidas ?? []).length > 0 && listaLancados("Saídas do caixa", (t.saidas ?? []).map((x) => `${x.nome} ${BRL(x.valor)}`), "")}
+              </div>
+            )}
+            {foraDoNormal.length > 0 && (
+              <div className="bg-warning/10 border border-warning/50 rounded-lg p-2 text-xs space-y-0.5" id="fora-do-normal">
+                <div className="font-semibold text-warning">⚠ Venda fora do normal — confira a chegada e a sobra:</div>
+                {foraDoNormal.map((f) => (
+                  <div key={f.pid}>• <b>{f.nome}</b>: vendeu {f.vendido} (o normal neste período é {f.normalDe === f.normalAte ? f.normalAte : `${f.normalDe} a ${f.normalAte}`})</div>
+                ))}
               </div>
             )}
             <p className="font-semibold">

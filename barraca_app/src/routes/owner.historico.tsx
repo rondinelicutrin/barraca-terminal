@@ -181,6 +181,7 @@ function Historico() {
                     {status === "ok" ? "OK" : "Falta"}
                   </span>
                   {t.editado && <span className="text-[10px] text-muted-foreground">editado</span>}
+                  {t.caixa.camposPreenchidos?.recontagem && <span className="text-[10px] text-warning" title="O caixa não batia e a funcionária recontou os produtos antes de fechar">recontado</span>}
                   <Link to="/owner/turno/$id" params={{ id: t.id }} className="inline-flex shrink-0 items-center justify-center h-9 w-9 text-muted-foreground hover:text-primary text-sm">✏️</Link>
                   <button
                     type="button"
