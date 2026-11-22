@@ -1,0 +1,62 @@
+// Conferência das contagens antes de fechar o turno (versão 68):
+// 1) venda fora do normal: compara o vendido de cada produto com o normal daquele período (manhã/tarde/noite)
+//    nas últimas 4 semanas;
+//    → o app pede para RECONTAR esses produtos antes de fechar (sem valores em R$);
+// B) chegada fora do normal: pede para confirmar a quantidade digitando de novo.
+//    Copos ficam de fora: chegam em pacotes grandes (300ml: 100; 400ml e 500ml: 50) e, como às vezes vêm com
+//    defeito, são contados um por um — qualquer quantidade é normal.
+
+const SEM_CONFERIR_CHEGADA = new Set(["cc_300", "cc_400", "cc_500"]);
+import { vendeu, getAllProducts, type State, type Turno } from "@/lib/store";
+import { somarDias } from "@/lib/folha";
+
+const JANELA_DIAS = 28;
+const MIN_AMOSTRAS = 3;
+
+function amostras(state: State, t: Turno, pid: string, campo: "vendido" | "chegada"): number[] {
+  const de = somarDias(t.date, -JANELA_DIAS);
+  const out: number[] = [];
+  for (const h of state.historico) {
+    if (h.id === t.id || !h.closedAt || h.shift !== t.shift || h.date < de || h.date >= t.date) continue;
+    const it = h.items[pid];
+    if (!it) continue;
+    out.push(campo === "vendido" ? (vendeu(it) ?? 0) : (it.chegada ?? 0));
+  }
+  return out;
+}
+
+function percentil(v: number[], q: number) {
+  const s = [...v].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.max(0, Math.round(q * (s.length - 1))))];
+}
+
+export interface ForaDoNormal { pid: string; nome: string; vendido: number; normalDe: number; normalAte: number }
+
+// Produtos que venderam muito acima do normal deste período (sinal de sobra contada a menos ou chegada errada)
+export function vendasForaDoNormal(state: State, t: Turno): ForaDoNormal[] {
+  const out: ForaDoNormal[] = [];
+  for (const p of getAllProducts(state)) {
+    const it = t.items[p.id];
+    if (!it || it.sobra == null || !p.saleable) continue;
+    const vendido = vendeu(it) ?? 0;
+    const am = amostras(state, t, p.id, "vendido");
+    if (am.length < MIN_AMOSTRAS) continue;
+    const p80 = percentil(am, 0.8);
+    if (vendido > Math.max(p80 * 1.6, p80 + 3)) {
+      out.push({ pid: p.id, nome: p.name, vendido, normalDe: percentil(am, 0.2), normalAte: p80 });
+    }
+  }
+  return out.sort((a, b) => (b.vendido - b.normalAte) - (a.vendido - a.normalAte));
+}
+
+// Chegada fora do normal neste período: produto que nunca recebe nesse período, ou quantidade bem acima
+export function chegadaForaDoNormal(state: State, t: Turno, pid: string, n: number): { nunca: boolean; normalAte: number } | null {
+  if (!(n > 0)) return null;
+  if (SEM_CONFERIR_CHEGADA.has(pid)) return null; // copos: qualquer quantidade é normal
+  const am = amostras(state, t, pid, "chegada");
+  if (am.length < MIN_AMOSTRAS) return null;
+  const comChegada = am.filter((x) => x > 0);
+  if (comChegada.length === 0) return { nunca: true, normalAte: 0 };
+  const p80 = percentil(comChegada, 0.8);
+  return n > Math.max(p80 * 1.6, p80 + 6) ? { nunca: false, normalAte: p80 } : null;
+}

@@ -6,6 +6,7 @@ import {
   arrecadadoTurno, dinheiroNoCaixa, realMaq, nomeMaquina, type ShiftKey, type ShiftItem, type Caixa, type Turno,
 } from "@/lib/store";
 import { pendentesDoTipo } from "@/lib/fila";
+import { chegadaForaDoNormal } from "@/lib/conferencia";
 import { somarDias } from "@/lib/folha";
 import { BRL, num, parseBR, parseInt2, todayISO, shiftLabel } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -418,6 +419,22 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
     upd({ sobra: n });
   };
 
+  // B) Chegada fora do normal (produto que não costuma chegar neste período ou quantidade bem acima):
+  // confirma digitando de novo; se não confirmar, volta ao valor anterior
+  const conferirChegada = (n: number | null, anterior: number | null) => {
+    if (n == null || !state.turnoAtivo) return;
+    const f = chegadaForaDoNormal(state, state.turnoAtivo, product.id, n);
+    if (!f) return;
+    const r = prompt(`Chegaram ${fmtQ(n)} ${product.name}?\n\n` +
+      (f.nunca ? `Normalmente não chega ${product.name} neste período.` : `O normal neste período é chegar até ${fmtQ(f.normalAte)}.`) +
+      `\n\nDigite a quantidade de novo para confirmar:`);
+    const conf = r == null ? NaN : (product.decimal ? parseBR(r) : parseInt2(r));
+    if (r == null || r.trim() === "" || conf !== n) {
+      upd({ chegada: anterior });
+      alert(`Chegada de ${product.name} NÃO confirmada: voltou para ${anterior == null ? "vazio" : fmtQ(anterior)}. Lance só o que chegou de verdade.`);
+    }
+  };
+
   // Valida consumoEst (gelo barraca)
   const handleConsumoEst = (n: number) => {
     const usado = (item.consumo || 0) + (item.descarte || 0);
@@ -444,7 +461,7 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
       <div className="grid grid-cols-3 gap-1.5">
         <Field label="Entrada" value={item.entrada} readOnly blue decimal={product.decimal} />
         <Field label="Chegada" value={item.chegada ?? ""} placeholder="—" decimal={product.decimal}
-          onChangeNullable={(n) => upd({ chegada: n })} />
+          onChangeNullable={(n) => upd({ chegada: n })} onCommit={conferirChegada} />
         <Field label="Sobra" value={item.sobra ?? ""} placeholder="—" decimal={product.decimal}
           error={overflow}
           onChangeNullable={handleSobra} />
@@ -481,8 +498,10 @@ function ProductRow({ product, item: itemProp }: { product: ReturnType<typeof ge
   );
 }
 
-function Field({ label, value, onChange, onChangeNullable, readOnly, blue, error, placeholder, decimal }: {
+function Field({ label, value, onChange, onChangeNullable, onCommit, readOnly, blue, error, placeholder, decimal }: {
   label: string; value: number | string;
+  // Ao sair do campo, se o valor mudou: (valor novo, valor de quando entrou no campo)
+  onCommit?: (novo: number | null, anterior: number | null) => void;
   onChange?: (n: number) => void;
   // Use quando o campo pode ficar "não preenchido" (null) — string vazia dispara null em vez de 0,
   // permitindo digitar o número zero normalmente sem ele ser confundido com "campo vazio".
@@ -492,6 +511,8 @@ function Field({ label, value, onChange, onChangeNullable, readOnly, blue, error
   const display = (v: number | string) => (v === "" ? "" : decimal ? num(Number(v)) : String(v));
   const [text, setText] = useState(() => display(value));
   const focused = useRef(false);
+  const aoEntrar = useRef<number | null>(null);
+  const comoNumero = (v: number | string) => (v === "" ? null : Number(v));
 
   useEffect(() => {
     if (!focused.current) setText(display(value));
@@ -504,8 +525,12 @@ function Field({ label, value, onChange, onChangeNullable, readOnly, blue, error
       <input
         type="text" inputMode={decimal ? "decimal" : "numeric"} readOnly={readOnly} placeholder={placeholder}
         value={text}
-        onFocus={() => { focused.current = true; }}
-        onBlur={() => { focused.current = false; setText(display(value)); }}
+        onFocus={() => { focused.current = true; aoEntrar.current = comoNumero(value); }}
+        onBlur={() => {
+          focused.current = false; setText(display(value));
+          const agora = comoNumero(value);
+          if (onCommit && agora !== aoEntrar.current) onCommit(agora, aoEntrar.current);
+        }}
         onChange={(e) => {
           const raw = e.target.value;
           setText(raw);
