@@ -1,7 +1,12 @@
 // Conferência das contagens antes de fechar o turno (versão 68):
 // 1) venda fora do normal: compara o vendido de cada produto com o normal daquele período (manhã/tarde/noite)
 //    nas últimas 4 semanas;
+//    → o app pede para RECONTAR esses produtos antes de fechar (sem valores em R$);
 // B) chegada fora do normal: pede para confirmar a quantidade digitando de novo.
+//    Copos ficam de fora: chegam em pacotes grandes (300ml: 100; 400ml e 500ml: 50) e, como às vezes vêm com
+//    defeito, são contados um por um — qualquer quantidade é normal.
+
+const SEM_CONFERIR_CHEGADA = new Set(["cc_300", "cc_400", "cc_500"]);
 import { vendeu, getAllProducts, type State, type Turno } from "@/lib/store";
 import { somarDias } from "@/lib/folha";
 
@@ -47,6 +52,7 @@ export function vendasForaDoNormal(state: State, t: Turno): ForaDoNormal[] {
 // Chegada fora do normal neste período: produto que nunca recebe nesse período, ou quantidade bem acima
 export function chegadaForaDoNormal(state: State, t: Turno, pid: string, n: number): { nunca: boolean; normalAte: number } | null {
   if (!(n > 0)) return null;
+  if (SEM_CONFERIR_CHEGADA.has(pid)) return null; // copos: qualquer quantidade é normal
   const am = amostras(state, t, pid, "chegada");
   if (am.length < MIN_AMOSTRAS) return null;
   const comChegada = am.filter((x) => x > 0);
