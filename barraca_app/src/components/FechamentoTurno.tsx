@@ -239,14 +239,24 @@ export function FechamentoTurno({ onClosed }: { onClosed: (t: Turno) => void }) 
       alert(`A sobra não pode ser maior que entrada + chegada. Corrija no menu Turno antes de fechar:\n\n${sobraDemais.map((p) => `• ${p.name}`).join("\n")}`);
       return;
     }
+    // Versão 69: maquininha 2 desmarcada, mas com valor no visor vindo do turno anterior (ex.: Stone usada de
+    // madrugada ou de dia). Se ficar desmarcada, o próximo turno herda 0 e conta essas vendas de novo.
+    const baseMaq2 = t.caixa.maq2.base ?? 0;
+    if (!t.caixa.maq2Ativa && baseMaq2 > 0) {
+      const nome = nomeMaquina(state.taxasMaquininha, "maq2");
+      alert(`ATENÇÃO: a ${nome} já marcava ${BRL(baseMaq2)} no turno anterior.\n\n` +
+        `Marque "Usar ${nome}" no menu Turno → Caixa e digite o valor que aparece no visor.\n` +
+        `Se não vendeu nada nela, repita ${BRL(baseMaq2)}.`);
+      return;
+    }
     // Maquininha nunca pode ficar menor que o valor do turno anterior (base)
     const maqsAbaixo = (t.caixa.maq2Ativa ? (["maq1", "maq2"] as const) : (["maq1"] as const))
       .filter((m) => maqAbaixoDaBase(t.caixa[m], t.shift));
     if (maqsAbaixo.length > 0) {
       alert(`ATENÇÃO: O VALOR DA MAQUININHA SÓ PODE SER IGUAL OU MAIOR QUE O DO TURNO ANTERIOR.\n\n` +
         maqsAbaixo.map((m) => `• ${nomeMaquina(state.taxasMaquininha, m)}: lançado ${BRL(valorComparadoMaq(t.caixa[m], t.shift))}, ` +
-          `turno anterior ${BRL(t.caixa[m].base)}`).join("\n") +
-        `\n\nCorrija no menu Turno → Caixa antes de fechar.`);
+          `turno anterior ${BRL(t.caixa[m].base)}. Se não vendeu nada nela, repita ${BRL(t.caixa[m].base)}.`).join("\n") +
+        `\n\nDigite o valor que aparece no visor (menu Turno → Caixa) antes de fechar.`);
       return;
     }
     const naoPreenchidos = camposObrigatoriosDoTurno(t, state.taxasMaquininha)

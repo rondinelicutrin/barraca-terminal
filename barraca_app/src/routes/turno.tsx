@@ -740,6 +740,12 @@ function CaixaView({ camposObrigatorios }: { camposObrigatorios: { key: string; 
           />
           Usar {nomeMaquina(state.taxasMaquininha, "maq2")}
         </label>
+        {!c.maq2Ativa && (c.maq2.base ?? 0) > 0 && (
+          <p className="text-xs font-semibold text-destructive mb-2" id="maq2-com-base">
+            A {nomeMaquina(state.taxasMaquininha, "maq2")} já marcava {BRL(c.maq2.base)} no turno anterior. Marque e digite o valor
+            do visor — se não vendeu nada nela, repita {BRL(c.maq2.base)}.
+          </p>
+        )}
         {c.maq2Ativa && (
           <MaquininhaCard
             label={nomeMaquina(state.taxasMaquininha, "maq2")}
