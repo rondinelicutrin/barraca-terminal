@@ -122,6 +122,12 @@ function EditTurno() {
       `\n\nSalvar mesmo assim?`)) {
       return;
     }
+    // Versão 69: maquininha 2 desmarcada com valor herdado → o próximo turno herdaria 0 e contaria de novo
+    if (!local.caixa.maq2Ativa && (local.caixa.maq2.base ?? 0) > 0 && !confirm(
+      `A ${nomeMaquina(state.taxasMaquininha, "maq2")} está DESMARCADA, mas tem ${BRL(local.caixa.maq2.base)} do turno anterior.\n\n` +
+      `Se não vendeu nada nela, marque e repita ${BRL(local.caixa.maq2.base)} no visor — senão o próximo turno começa do zero e conta essas vendas de novo.\n\nSalvar mesmo assim?`)) {
+      return;
+    }
     if (isAtivo) {
       dispatch({ type: "EDIT_ATIVO", turno: local });
     } else {
